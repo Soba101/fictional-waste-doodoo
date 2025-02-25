@@ -38,7 +38,7 @@ DASHBOARD_IP = "192.168.18.107"  # Update with your dashboard IP
 DASHBOARD_PORT = 5001
 DEVICE_ID = "RaspberryPi"
 VIDEO_PORT = 8000
-ROBOFLOW_API_KEY = "NzQNgtFOFaIMRabyhRFM"  # Your Roboflow API key
+ROBOFLOW_API_KEY = "apikey"  # Your Roboflow API key
 MODEL_ID = "yolo-waste-detection/1"  # Roboflow model
 
 # Global variables for frame sharing
