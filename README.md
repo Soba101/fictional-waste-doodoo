@@ -54,7 +54,7 @@ The edge device runs computer vision algorithms to detect waste items in camera 
    - Ensure your Roboflow API key is valid
      ```python
      # Line 23 in pi-wastedetect.py
-     ROBOFLOW_API_KEY = "NzQNgtFOFaIMRabyhRFM"  # Your Roboflow API key
+     ROBOFLOW_API_KEY = "apikey"  # Your Roboflow API key
      MODEL_ID = "yolo-waste-detection/1"  # Roboflow model
      ```
 
