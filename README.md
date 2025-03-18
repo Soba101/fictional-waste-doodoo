@@ -292,15 +292,5 @@ Contributions to the Waste Detection System are welcome. Please follow these ste
 5. Open a Pull Request
 
 ## License
+MIT
 
-[License information here]
-
-## Contact
-
-[Contact information here]
-
-## Acknowledgments
-
-- Contributors and team members
-- Organizations and funding sources
-- Open-source libraries and tools used
