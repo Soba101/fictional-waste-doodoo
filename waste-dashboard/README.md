@@ -4,103 +4,79 @@ A real-time Streamlit dashboard for monitoring waste detection from edge devices
 
 ## Overview
 
-The Waste Detection Dashboard is designed to:
-- Receive and process data from edge devices running waste detection models
-- Display real-time waste detection information on an interactive map
-- Show live video feeds from connected devices
-- Track detection statistics and gas sensor alerts
-- Maintain historical data for trend analysis
-- Discover and monitor edge devices on the network
+The Waste Detection Dashboard is the central visualization and monitoring component of the waste detection system that:
 
-## Project Structure
+1. Receives real-time data from edge devices running waste detection
+2. Displays device locations and status on an interactive map
+3. Shows live video feeds from connected devices
+4. Visualizes detection statistics and historical trends
+5. Monitors gas sensor readings for environmental alerts
+6. Stores detection data in a MariaDB database
 
-The project is modular and organized into several components:
-
-- `main.py` - Entry point that initializes the dashboard, sets up logging, and applies styling
-- `data_receiver.py` - Contains the `DataReceiver` class that handles socket connections from edge devices
-- `dashboard_ui.py` - Defines the Streamlit UI components, layouts, and visualizations
-- `utils.py` - Utility functions for device discovery, status checking, and logging
-- `state_manager.py` - Manages Streamlit session state and processes incoming data
-- `__init__.py` - Makes the directory a proper Python package
-
-## Features
-
-### Real-time Monitoring
-- Socket-based communication with edge devices
-- Thread-safe data processing with queues
-- Real-time metrics and status updates
-
-### Interactive Map
-- Folium-based map showing device locations
-- Color-coded markers based on device status
-- Clickable markers to access device details
-
-### Live Video Feed
-- Stream integration from device cameras
-- Toggle between map and live feed views
-- Error handling for connectivity issues
-
-### Data Visualization
-- Detection history charts with Plotly
-- Waste type distribution analysis
-- Time-series charts for historical trends
-
-### Network Management
-- Automatic device discovery on local network
-- IP tracking and connection management
-- Device status monitoring and alerts
-
-### Database Integration
-- MariaDB/MySQL integration for persistent data storage
-- Historical data retrieval and analysis
-- Detection event tracking and reporting
-
-### Debugging Tools
-- Debug mode for system diagnostics
-- Database connection debugging
-- Query testing and custom SQL execution
-
-## Setup and Installation
-
-### Prerequisites
+## System Requirements
 
 - Python 3.7+
-- MariaDB or MySQL database server
+- MariaDB/MySQL database
 - Network connectivity to edge devices
+- Minimum 2GB RAM (4GB+ recommended)
+- Storage space for detection data and images
 
-### Database Setup
+## Installation
 
-1. Install and configure MariaDB/MySQL server
-2. Create a database named `waste_detection`
-3. Create a user with appropriate permissions
-4. Update the database connection details in `dashboard_ui.py`:
-   ```python
-   DB_HOST = "your_database_host"
-   DB_USER = "waste_user"
-   DB_PASSWORD = "your_password"
-   DB_NAME = "waste_detection"
-   ```
+### 1. Clone the Repository
 
-### Installation
+```bash
+git clone https://github.com/your-username/waste-detection-dashboard.git
+cd waste-detection-dashboard
+```
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/waste-detection-dashboard.git
-   cd waste-detection-dashboard
-   ```
+### 2. Set Up Python Environment
 
-2. Create a virtual environment (recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+```bash
+# Create a virtual environment
+python -m venv venv
 
-3. Install required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+# Activate the environment
+# On Windows:
+venv\Scripts\activate
+# On Linux/Mac:
+source venv/bin/activate
 
-### Starting the Dashboard
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 3. Set Up Database
+
+Ensure you have MariaDB installed and running. Then create the required database schema (see the MariaDB README for detailed instructions).
+
+## Configuration
+
+The dashboard configuration can be found in several files:
+
+### Dashboard UI Configuration (`dashboard_ui.py`)
+
+```python
+# Database connection details
+DB_HOST = "192.168.18.113"  # Change to your database host
+DB_USER = "waste_user"
+DB_PASSWORD = "password"  # Change in production!
+DB_NAME = "waste_detection"
+```
+
+### Data Receiver Configuration (`data_receiver.py`)
+
+```python
+# Network configuration
+self.host = host  # Default: '0.0.0.0' (all interfaces)
+self.port = port  # Default: 5001
+```
+
+Update these values to match your network and database configuration.
+
+## Running the Dashboard
+
+### Start the Dashboard
 
 ```bash
 streamlit run main.py
@@ -108,136 +84,204 @@ streamlit run main.py
 
 The dashboard will be available at `http://localhost:8501` by default.
 
-To enable debug mode, append `?debug=true` to the URL:
+### Debug Mode
+
+For advanced debugging and database diagnostics, use:
+
 ```
 http://localhost:8501/?debug=true
 ```
 
-## Edge Device Integration
+### Run on a Different Port
 
-### Communication Protocol
-
-Edge devices should connect to the dashboard via TCP socket on port 5001 and send JSON-formatted data with the following structure:
-
-```json
-{
-  "device_id": "waste-device-01",
-  "timestamp": "2025-03-19T14:30:00",
-  "lat": 1.3521,
-  "lon": 103.8198,
-  "predictions": [
-    {
-      "class": "plastic_bottle",
-      "confidence": 0.92,
-      "x": 100,
-      "y": 150,
-      "width": 50,
-      "height": 120
-    }
-  ],
-  "gas_value": 320
-}
+```bash
+streamlit run main.py --server.port 8502
 ```
 
-### Required Fields:
-- `device_id`: Unique identifier for the device
-- `timestamp`: ISO-formatted timestamp
-- `predictions`: Array of detection results including class, confidence, and coordinates
+## Dashboard Features
 
-### Optional Fields:
-- `lat`/`lon`: Device location coordinates
-- `gas_value`: Gas sensor reading (for detecting methane or other gases)
+### Map View
+- Interactive map showing device locations
+- Color-coded markers indicating device status
+- Click on markers to view device details and access live feed
 
-### Device Web Server
+### Live Feed
+- Real-time video stream from edge devices
+- Detection overlays showing waste items
+- Toggle between map and live feed views
 
-Edge devices should run a web server on port 8000 with the following endpoints:
-- `/video_feed` - MJPEG stream for live video
-- `/status` - JSON endpoint returning device status information
+### Metrics Panel
+- Total waste detections counter
+- Gas alert monitoring
+- Active device count
+- Connection status indicators
 
-## Database Schema
+### Detection History
+- Time-series visualization of detection data
+- Filtering by date range
+- Detailed device-specific statistics
+- Waste type distribution analysis
 
-The system requires the following tables:
+### Device Management
+- Automatic device discovery
+- Connection status monitoring
+- IP address tracking
+- Device activity history
 
-### `detections`
-- `detection_id` - Unique ID for each detection event
-- `device_id` - ID of the detecting device
-- `timestamp` - When the detection occurred
-- `num_detections` - Number of items detected
-- `gas_value` - Gas sensor reading
+### Connection Log
+- Real-time logging of device connections
+- Error and status message tracking
+- Debug information for troubleshooting
 
-### `detected_items`
-- `item_id` - Unique ID for each detected item
-- `detection_id` - Reference to parent detection event
-- `class_name` - Type of waste detected
-- `confidence` - Detection confidence score
-- `x_coord`, `y_coord`, `width`, `height` - Bounding box coordinates
+## Architecture
 
-### `keyframes`
-- `keyframe_id` - Unique ID for image
-- `detection_id` - Reference to detection event
-- `image_data` - Binary image data
+### Component Structure
 
-## Configuration Options
+The dashboard consists of several modular components:
 
-The dashboard can be configured by modifying the following:
+- `main.py` - Entry point for the application
+- `dashboard_ui.py` - Streamlit UI components and layout
+- `data_receiver.py` - Socket server for receiving edge device data
+- `state_manager.py` - Manages dashboard state and processes incoming data
+- `utils.py` - Utility functions for device discovery and status checking
 
-- **Socket Binding**: To change the listening port, modify the `port` parameter in `data_receiver.py`
-- **Database Connection**: Update database parameters in `dashboard_ui.py`
-- **Map Center**: Default map location is set to Singapore (1.3521, 103.8198)
-- **Gas Alert Threshold**: Default is 500, adjust in `state_manager.py`
-- **Device Timeout**: Devices are considered inactive after 5 minutes without data
+### Data Flow
+
+1. **Edge Devices** capture waste detection data
+2. Data is sent to the **Data Receiver** component via TCP sockets (port 5001)
+3. The **State Manager** processes incoming data and updates the dashboard
+4. The **Dashboard UI** displays the information in real-time
+5. Detection data is stored in the **MariaDB Database** for historical analysis
+
+## Network Requirements
+
+- The dashboard server must be accessible by all edge devices
+- Edge devices need network access to:
+  - Dashboard server on port 5001 (for sending detection data)
+  - Database server on port 5002 (for sending detection data with images)
+- Dashboard needs access to:
+  - Edge devices on port 8000 (for viewing live video feeds)
+  - Database server on port 3306 (MariaDB)
+
+## Dashboard Customization
+
+### Map Configuration
+
+The default map is centered on Singapore. To change this location:
+
+1. Locate the `create_map` function in `dashboard_ui.py`
+2. Change the coordinates in `m = folium.Map(location=[1.3521, 103.8198], zoom_start=12)`
+
+### Interface Styling
+
+Custom CSS styling can be modified in the `apply_custom_css` function in `main.py`.
+
+### Chart Appearance
+
+Chart configurations can be customized in `create_bottom_section_plotly` function in `dashboard_ui.py`.
 
 ## Troubleshooting
 
-### Common Issues
+### Connection Issues
 
-1. **No Devices Connecting**
+1. **No devices connecting**:
    - Verify network connectivity between dashboard and devices
-   - Check firewall settings to ensure port 5001 is open
+   - Check that the correct IP and port are configured on edge devices
    - Use the "Discover Devices" button to scan the network
+   - Check logs for connection errors
 
-2. **Database Connection Errors**
-   - Confirm database server is running
-   - Verify connection credentials
-   - Check network accessibility to database server
+2. **Database connection errors**:
+   - Verify database server is running
+   - Check connection credentials in `dashboard_ui.py`
    - Enable debug mode for detailed database diagnostics
 
-3. **Missing Live Video Feed**
-   - Ensure device web server is running on port 8000
-   - Verify network path between dashboard and device
-   - Check browser security settings for mixed content
+3. **Live video feed not showing**:
+   - Ensure the edge device web server is running
+   - Check network connectivity to the device's port 8000
+   - Verify the device's IP address is correctly detected
 
-### Logs
+### Dashboard Performance
 
-Detailed logs are stored in the `logs/` directory with timestamp-based filenames.
+If the dashboard becomes slow:
 
-## Performance Considerations
+1. Reduce the retention period for detection history
+2. Optimize database queries (add indexes)
+3. Consider running the dashboard on a more powerful machine
+4. Increase the StreamingResponse chunk size for smoother video
 
-- The dashboard is designed to handle multiple edge devices
-- For large deployments, consider database indexing and optimization
-- Socket timeouts are set to prevent blocking operations
-- Thread safety is implemented with queues for communication
+## Logs
+
+Dashboard logs are stored in the `logs` directory with timestamp-based filenames:
+```
+logs/dashboard_YYYYMMDD_HHMMSS.log
+```
+
+View logs with:
+```bash
+tail -f logs/dashboard_*.log
+```
+
+## Security Recommendations
+
+1. Change default database passwords
+2. Use HTTPS for production deployments
+3. Restrict network access to the dashboard
+4. Implement user authentication for the dashboard
+5. Keep all components updated regularly
+
+## Running in Production
+
+For production deployments:
+
+1. **Use a reverse proxy**:
+   ```bash
+   # Example with nginx
+   sudo apt install nginx
+   # Configure nginx to proxy requests to Streamlit
+   ```
+
+2. **Set up as a service**:
+   ```bash
+   # Create a systemd service file
+   sudo nano /etc/systemd/system/waste-dashboard.service
+   
+   # Service file content:
+   [Unit]
+   Description=Waste Detection Dashboard
+   After=network.target
+   
+   [Service]
+   User=your_user
+   WorkingDirectory=/path/to/waste-detection-dashboard
+   ExecStart=/path/to/waste-detection-dashboard/venv/bin/streamlit run main.py
+   Restart=always
+   RestartSec=10
+   
+   [Install]
+   WantedBy=multi-user.target
+   
+   # Enable and start the service
+   sudo systemctl enable waste-dashboard.service
+   sudo systemctl start waste-dashboard.service
+   ```
+
+3. **Optimize database** for production loads
 
 ## Future Enhancements
 
-- User authentication system
-- Device configuration management
-- Alarm and notification system
-- Mobile application integration
-- AI-based trend analysis
-- Integration with waste management systems
+Potential improvements for the dashboard:
 
-## License
+1. User authentication system
+2. Mobile application integration
+3. Notification system for critical alerts
+4. Advanced analytics and prediction features
+5. Integration with waste management systems
+6. Report generation and export functionality
 
-MIT
+## License and Credits
 
-## Contributors
+This software is part of the Waste Detection System.
 
-- Your Name
-- Team Members
+## Support
 
-## Acknowledgments
-
-- Singapore Waste Management Initiative
-- Streamlit Community
-- Open Source Contributors
+For issues or questions, check the logs first, then consult the project documentation.
