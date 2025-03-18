@@ -612,9 +612,10 @@ def create_bottom_section_plotly():
         SELECT 
             DATE(timestamp) AS detection_date, 
             COUNT(DISTINCT detection_id) AS detection_events,
-            SUM(num_detections) AS detection_count
+            SUM(CASE WHEN num_detections IS NULL THEN 0 ELSE num_detections END) AS detection_count
         FROM detections
-        WHERE timestamp BETWEEN %s AND %s
+        WHERE timestamp IS NOT NULL
+        AND timestamp BETWEEN %s AND CONCAT(%s, ' 23:59:59')
         GROUP BY detection_date
         ORDER BY detection_date ASC
         """
@@ -827,7 +828,7 @@ def display_detailed_detection_data(selected_date):
                 
                 # If we have keyframes, show a gallery of sample images
                 if 'keyframe_id' in df_details.columns and df_details['keyframe_id'].notna().any():
-                    st.subheader("Sample Keyframes")
+                    st.subheader("Keyframes")
                     st.info("Click on an image to view full size")
                     
                     # Limit to at most 5 keyframes to display
@@ -839,12 +840,37 @@ def display_detailed_detection_data(selected_date):
                     for i, keyframe_id in enumerate(keyframe_ids):
                         with cols[i % len(cols)]:
                             try:
-                                # In a real implementation, you would fetch and display the actual image
-                                # Here we're just showing a placeholder since the sample data has dummy image data
-                                st.image("https://via.placeholder.com/300x200?text=Keyframe+ID+%s" % keyframe_id, 
-                                         caption=f"Keyframe {int(keyframe_id)}", use_container_width=True)
+                                # Query to retrieve the actual image data from the database
+                                keyframe_query = """
+                                SELECT image_data, image_format FROM keyframes 
+                                WHERE keyframe_id = %s
+                                """
+                                
+                                # Execute the query using pd.read_sql which handles parameters differently
+                                df_keyframe = pd.read_sql(keyframe_query, engine, params=(int(keyframe_id),))
+                                
+                                if not df_keyframe.empty and df_keyframe['image_data'].iloc[0] is not None:
+                                    # Get the binary image data and format
+                                    image_data = df_keyframe['image_data'].iloc[0]
+                                    image_format = df_keyframe['image_format'].iloc[0] or 'jpg'
+                                    
+                                    # Convert binary data to image
+                                    from PIL import Image
+                                    import io
+                                    
+                                    # Create an in-memory file-like object
+                                    image_bytes = io.BytesIO(image_data)
+                                    
+                                    # Open the image with PIL
+                                    img = Image.open(image_bytes)
+                                    
+                                    # Display the image in Streamlit
+                                    st.image(img, caption=f"Keyframe {int(keyframe_id)}", use_container_width=True)
+                                else:
+                                    st.warning(f"No image data found for keyframe {int(keyframe_id)}")
                             except Exception as e:
                                 st.warning(f"Error loading keyframe {int(keyframe_id)}: {e}")
+                                logger.error(f"Keyframe load error: {e}")
             else:
                 st.info("No detailed data available for this date.")
         else:
@@ -924,9 +950,6 @@ def debug_database_connection():
     """Function to debug database connection and data"""
     st.markdown("---")
     st.markdown("### Database Connection Debugger")
-    
-    # Add a call to our new debug function
-    debug_detection_chart_data()
     
     # Button to test the daily detection counts query specifically
     if st.button("🔍 Test Detection Counts Query"):
@@ -1074,112 +1097,4 @@ def debug_database_connection():
             except Exception as e:
                 st.error(f"Error executing query: {e}")
                 
-def debug_detection_chart_data():
-    """Debug the data flow for the detection chart"""
-    
-    with st.expander("Detection Chart Data Flow Debug", expanded=True):
-        # 1. Get raw data from database
-        st.subheader("1. Raw Database Query")
-        try:
-            query = """
-            SELECT DATE(timestamp) AS detection_date, 
-                   SUM(num_detections) AS detection_count  -- Sum detections per date
-            FROM detections
-            GROUP BY detection_date
-            ORDER BY detection_date ASC;
-            """
-            raw_df = pd.read_sql(query, engine)
-            
-            if not raw_df.empty:
-                # Convert to datetime for consistent handling
-                if not pd.api.types.is_datetime64_any_dtype(raw_df["detection_date"]):
-                    raw_df["detection_date"] = pd.to_datetime(raw_df["detection_date"])
-                
-                st.write(f"Raw data has {len(raw_df)} rows")
-                st.dataframe(raw_df, use_container_width=True)
-                
-                # Check Feb 16th specifically
-                feb16 = raw_df[raw_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
-                if not feb16.empty:
-                    st.success(f"✅ Feb 16th data found: {feb16['detection_count'].values[0]} detections")
-                else:
-                    st.warning("⚠️ Feb 16th data not found in raw query!")
-            else:
-                st.warning("No data returned from database")
-        except Exception as e:
-            st.error(f"Error executing raw query: {e}")
-        
-        # 2. Check data after date filtering
-        st.subheader("2. After Date Filtering")
-        days_to_display = 30  # Default filter
-        
-        try:
-            # Filter to date range
-            end_date = datetime.now().date()
-            start_date = end_date - timedelta(days=days_to_display)
-            
-            if not raw_df.empty:
-                # Apply the same filter used in the chart
-                mask = (raw_df["detection_date"].dt.date >= start_date) & (raw_df["detection_date"].dt.date <= end_date)
-                filtered_df = raw_df[mask].copy()
-                
-                st.write(f"After filtering: {len(filtered_df)} rows")
-                st.dataframe(filtered_df, use_container_width=True)
-                
-                # Check Feb 16th specifically
-                feb16 = filtered_df[filtered_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
-                if not feb16.empty:
-                    st.success(f"✅ Feb 16th still present after filtering: {feb16['detection_count'].values[0]} detections")
-                else:
-                    st.warning("⚠️ Feb 16th filtered out!")
-            
-        except Exception as e:
-            st.error(f"Error in date filtering: {e}")
-        
-        # 3. Check after filling gaps
-        st.subheader("3. After Filling Gaps")
-        try:
-            if 'filtered_df' in locals() and not filtered_df.empty:
-                # Create continuous date range
-                date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-                
-                # Create dataframe with all dates
-                all_dates = pd.DataFrame({"detection_date": date_range})
-                
-                # Merge with filtered data
-                filtered_df_date_only = filtered_df.copy()
-                filtered_df_date_only["detection_date"] = filtered_df_date_only["detection_date"].dt.date
-                filtered_df_date_only["detection_date"] = pd.to_datetime(filtered_df_date_only["detection_date"])
-                
-                merged_df = pd.merge(all_dates, filtered_df_date_only, on="detection_date", how="left")
-                merged_df["detection_count"] = merged_df["detection_count"].fillna(0)
-                
-                st.write(f"After filling gaps: {len(merged_df)} rows")
-                st.dataframe(merged_df, use_container_width=True)
-                
-                # Check Feb 16th specifically
-                feb16 = merged_df[merged_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
-                if not feb16.empty:
-                    st.write(f"Feb 16th after gap filling: {feb16['detection_count'].values[0]} detections")
-                    
-                    # If it's zero but should have data, there's a merge problem
-                    if feb16['detection_count'].values[0] == 0:
-                        st.error("⚠️ Feb 16th data was LOST during the merge/gap filling process!")
-                        
-                        # Check the specific format of the dates to see if there's a mismatch
-                        st.write("Date format in filtered_df:")
-                        if not filtered_df.empty:
-                            feb16_filtered = filtered_df[filtered_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
-                            if not feb16_filtered.empty:
-                                st.write(f"Feb 16th original date value: {feb16_filtered['detection_date'].iloc[0]}")
-                                st.write(f"Date type: {type(feb16_filtered['detection_date'].iloc[0])}")
-                            
-                        st.write("Date format in date_range:")
-                        feb16_idx = (date_range.strftime('%Y-%m-%d') == '2025-02-16')
-                        if feb16_idx.any():
-                            st.write(f"Feb 16th in date_range: {date_range[feb16_idx][0]}")
-                            st.write(f"Date type: {type(date_range[feb16_idx][0])}")
-                else:
-                    st.error("⚠️ Feb 16th missing from the filled dataset!")
-        except Exception as e:
-            st.error(f"Error in gap filling: {e}")
+
