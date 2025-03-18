@@ -8,9 +8,62 @@ import socket
 import time
 import logging
 from datetime import datetime, timedelta
+import requests
+import io
+from PIL import Image
+import pymysql
+from sqlalchemy import create_engine
+import plotly.express as px
+from streamlit_plotly_events import plotly_events  # New import for Plotly events
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 
 from utils import check_device_status, discover_devices, add_connection_log
 from state_manager import calculate_metrics, process_queues
+ 
+# Database connection details
+DB_HOST = "192.168.18.113" # need to add a alt for hotspot
+DB_USER = "waste_user"
+DB_PASSWORD = "password"
+DB_NAME = "waste_detection"
+ 
+# Create SQLAlchemy engine
+DB_URI = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
+engine = create_engine(DB_URI)
+
+def fetch_detection_data():
+    """Fetch daily detection counts from MariaDB using SQLAlchemy."""
+    try:
+        # Improved query with better date handling and error checking
+        query = """
+        SELECT 
+            DATE(timestamp) AS detection_date, 
+            SUM(num_detections) AS detection_count
+        FROM detections
+        WHERE 
+            timestamp IS NOT NULL AND
+            num_detections > 0
+        GROUP BY detection_date
+        ORDER BY detection_date ASC;
+        """
+        
+        # Execute the query and log the result
+        logger.info("Executing detection data query")
+        df = pd.read_sql(query, engine)
+        
+        # Log the shape and preview of the result for debugging
+        if not df.empty:
+            logger.info(f"Fetched {len(df)} detection date records")
+            logger.info(f"Date range: {df['detection_date'].min()} to {df['detection_date'].max()}")
+            logger.info(f"Total detections: {df['detection_count'].sum()}")
+        else:
+            logger.warning("No detection data returned from query")
+            
+        return df
+    except Exception as e:
+        logger.error(f"Database connection error in fetch_detection_data: {str(e)}")
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame(columns=["detection_date", "detection_count"])
 
 # Setup logger
 logger = logging.getLogger('waste-dashboard.ui')
@@ -50,8 +103,8 @@ def create_dashboard_ui(receiver, log_file):
         create_right_column(metrics)
     
     #######################
-    # Bottom Section: Historical Chart
-    create_bottom_section()
+    # Bottom Section: Historical Chart (Plotly Version)
+    create_bottom_section_plotly()
     
     #######################
     # Footer
@@ -116,12 +169,6 @@ def create_sidebar(receiver):
         if st.button("Discover Devices"):
             discover_devices()
             st.sidebar.success("Discovery started!")
-    
-    # Display filters
-    st.sidebar.subheader("Display Settings")
-    selected_year = st.sidebar.selectbox("Select Year", [2023, 2024, 2025])
-    detection_threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, 0.5, 0.05)
-    gas_threshold = st.sidebar.slider("Gas Alert Threshold", 0, 1000, 500, 50)
     
     # Live feed toggle
     st.session_state.show_live_feed = st.sidebar.checkbox("Show Live Feed", 
@@ -515,39 +562,624 @@ def create_right_column(metrics):
         - Check the connection log for detailed network activity.
         """)
 
-def create_bottom_section():
-    """Create the bottom section with historical chart"""
+def create_bottom_section_plotly():
+    """
+    Create the bottom section with a basic Plotly chart.
+    """
     st.markdown("---")
     st.markdown("### Detection History")
     
-    # Prepare data for chart
-    if st.session_state.detection_history:
-        # Group by hour for the chart
-        df_history = pd.DataFrame(st.session_state.detection_history)
-        df_history['hour'] = df_history['time'].dt.floor('h')
+    # Date range controls
+    col1, col2 = st.columns([3, 2])
+    
+    with col1:
+        # Dropdown for preset date ranges
+        date_ranges = get_date_range_options()
+        selected_range = st.selectbox(
+            "Date Range",
+            options=range(len(date_ranges)),
+            format_func=lambda i: date_ranges[i]["label"],
+            index=3  # Changed from 2 to 3 to default to "Year to date"
+        )
+        days_to_display = date_ranges[selected_range]["days"]
+    
+    with col2:
+        # Refresh button that clears the cache to force data reload
+        refresh = st.button("Refresh Data")
         
-        hourly_counts = df_history.groupby(['hour', 'device'])['count'].sum().reset_index()
-        hourly_counts = hourly_counts.sort_values('hour')
+        # Chart type options
+        chart_type = st.radio(
+            "Chart Type",
+            options=["Line", "Bar"],
+            horizontal=True
+        )
         
-        # Create chart
-        chart = alt.Chart(hourly_counts).mark_line(point=True).encode(
-            x=alt.X('hour:T', title='Time'),
-            y=alt.Y('count:Q', title='Detections'),
-            color=alt.Color('device:N', title='Device'),
-            tooltip=['hour', 'device', 'count']
-        ).properties(
-            width=800,
-            height=300,
-            title='Hourly Detection Counts by Device'
-        ).interactive()
+    # Force refresh on button click by clearing cache
+    if refresh:
+        st.cache_data.clear()
+        st.rerun()
+    
+    # Calculate date range
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days_to_display)
+    
+    # Simple direct database query
+    try:
+        logger.info(f"Querying detection data from {start_date} to {end_date}")
         
-        st.altair_chart(chart, use_container_width=True)
+        # Basic query for detection counts
+        date_query = """
+        SELECT 
+            DATE(timestamp) AS detection_date, 
+            COUNT(DISTINCT detection_id) AS detection_events,
+            SUM(num_detections) AS detection_count
+        FROM detections
+        WHERE timestamp BETWEEN %s AND %s
+        GROUP BY detection_date
+        ORDER BY detection_date ASC
+        """
+        
+        # Execute query with parameters
+        df = pd.read_sql(
+            date_query, 
+            engine, 
+            params=(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')),
+            parse_dates=['detection_date']
+        )
+        
+        logger.info(f"Query returned {len(df)} rows")
+    except Exception as e:
+        logger.error(f"Error in detection query: {e}")
+        st.error(f"Error fetching detection data: {e}")
+        df = pd.DataFrame(columns=["detection_date", "detection_events", "detection_count"])
+    
+    # If the dataframe is empty, show a message
+    if df.empty:
+        st.warning("No detection data available for the selected date range.")
+        return
+    
+    # Create a metric selector for the chart
+    metric = st.radio(
+        "Chart Metric", 
+        options=["Total Items Detected", "Detection Events"],
+        horizontal=True,
+        index=0
+    )
+    
+    # Set the y-axis based on metric selection
+    y_column = "detection_count" if metric == "Total Items Detected" else "detection_events"
+    
+    # VERY BASIC CHART - just use Plotly Express directly with minimal settings
+    try:
+        # Create the basic chart with proper markers for visibility
+        if chart_type == "Line":
+            fig = px.line(
+                df,
+                x="detection_date",
+                y=y_column,
+                title=f"Daily {metric}"
+            )
+            # Add markers explicitly to make points more visible
+            fig.update_traces(mode='lines+markers', marker=dict(size=8))
+        else:  # Bar chart
+            fig = px.bar(
+                df,
+                x="detection_date",
+                y=y_column,
+                title=f"Daily {metric}"
+            )
+        
+        # Improve appearance with grid lines
+        fig.update_layout(
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                tickformat='%b %d'
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                title=y_column
+            ),
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font=dict(color='white'),
+            height=450  # Fixed height to ensure consistency
+        )
+        
+        # Use ONLY plain st.plotly_chart - no interactivity for stability
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show summary
+        st.markdown(f"**Total {metric}:** {int(df[y_column].sum())}")
+        
+        # Select date manually via dropdown instead of clicking
+        date_options = df['detection_date'].dt.strftime('%Y-%m-%d').tolist()
+        if date_options:
+            selected_date = st.selectbox("Select a date to view details:", 
+                                       options=date_options,
+                                       format_func=lambda x: pd.to_datetime(x).strftime('%B %d, %Y'))
+            
+            if selected_date:
+                # Display detailed data for the selected date
+                display_detailed_detection_data(selected_date)
+                
+    except Exception as e:
+        st.error(f"Error creating chart: {e}")
+        logger.error(f"Chart error: {e}")
+
+def display_detailed_detection_data(selected_date):
+    """Fetch and display detection details for a selected date"""
+    st.markdown("---")
+    st.markdown(f"### Historical Waste Detection Data for {selected_date}")
+
+    try:
+        # First get summary information for this date
+        summary_query = """
+        SELECT 
+            COUNT(DISTINCT device_id) AS devices_count,
+            SUM(num_detections) AS total_detections,
+            COUNT(DISTINCT detection_id) AS detection_events,
+            AVG(gas_value) AS avg_gas_value
+        FROM detections
+        WHERE DATE(timestamp) = %s
+        """
+        df_summary = pd.read_sql(summary_query, engine, params=(selected_date,))
+        
+        if not df_summary.empty and df_summary['total_detections'].iloc[0] > 0:
+            # Display summary information
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Detection Events", df_summary['detection_events'].iloc[0])
+            with col2:
+                st.metric("Total Items Detected", df_summary['total_detections'].iloc[0])
+            with col3:
+                st.metric("Active Devices", df_summary['devices_count'].iloc[0])
+            with col4:
+                st.metric("Avg Gas Value", f"{df_summary['avg_gas_value'].iloc[0]:.2f}")
+            
+            # Get waste type distribution for this date
+            waste_query = """
+            SELECT 
+                di.class_name, 
+                COUNT(*) AS count,
+                AVG(di.confidence) AS avg_confidence
+            FROM detections d
+            JOIN detected_items di ON d.detection_id = di.detection_id
+            WHERE DATE(d.timestamp) = %s
+            GROUP BY di.class_name
+            ORDER BY count DESC
+            """
+            df_waste = pd.read_sql(waste_query, engine, params=(selected_date,))
+            
+            if not df_waste.empty:
+                st.subheader("Waste Type Distribution")
+                
+                # Create two columns layout
+                col1, col2 = st.columns([3, 2])
+                
+                with col1:
+                    # Create a bar chart for waste types
+                    fig = px.bar(
+                        df_waste,
+                        x='count', 
+                        y='class_name',
+                        orientation='h',
+                        labels={'count': 'Number of Items', 'class_name': 'Waste Type'},
+                        color='avg_confidence',
+                        color_continuous_scale='RdYlGn',
+                        range_color=[0.5, 1.0],
+                        title="Waste Types Detected"
+                    )
+                    
+                    fig.update_layout(
+                        plot_bgcolor="#1e1e1e",
+                        paper_bgcolor="#1e1e1e",
+                        font=dict(color="#ffffff"),
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    # Display the data table
+                    df_waste['avg_confidence'] = df_waste['avg_confidence'].round(2)
+                    st.dataframe(df_waste, use_container_width=True)
+            
+            # Use parameterized query for detailed data (with LIMIT to prevent overloading)
+            query = """
+            SELECT 
+                d.detection_id, 
+                d.device_id, 
+                d.timestamp, 
+                d.num_detections, 
+                d.gas_value,
+                di.class_name, 
+                di.confidence, 
+                di.x_coord, 
+                di.y_coord, 
+                di.width, 
+                di.height,
+                k.keyframe_id
+            FROM detections d
+            LEFT JOIN detected_items di ON d.detection_id = di.detection_id
+            LEFT JOIN keyframes k ON d.detection_id = k.detection_id
+            WHERE DATE(d.timestamp) = %s
+            ORDER BY d.timestamp ASC, d.detection_id ASC
+            LIMIT 100;
+            """
+            
+            df_details = pd.read_sql(query, engine, params=(selected_date,))
+            
+            if not df_details.empty:
+                st.subheader("Detection Details")
+                
+                # Format the timestamp for better readability
+                if 'timestamp' in df_details.columns:
+                    df_details['timestamp'] = pd.to_datetime(df_details['timestamp']).dt.strftime('%H:%M:%S')
+                
+                # Round confidence values
+                if 'confidence' in df_details.columns:
+                    df_details['confidence'] = df_details['confidence'].round(2)
+                
+                # Show the details table
+                st.dataframe(df_details, use_container_width=True)
+                
+                # If we have keyframes, show a gallery of sample images
+                if 'keyframe_id' in df_details.columns and df_details['keyframe_id'].notna().any():
+                    st.subheader("Sample Keyframes")
+                    st.info("Click on an image to view full size")
+                    
+                    # Limit to at most 5 keyframes to display
+                    keyframe_ids = df_details['keyframe_id'].dropna().unique()[:5]
+                    
+                    # Create a grid of images
+                    cols = st.columns(min(len(keyframe_ids), 5))
+                    
+                    for i, keyframe_id in enumerate(keyframe_ids):
+                        with cols[i % len(cols)]:
+                            try:
+                                # In a real implementation, you would fetch and display the actual image
+                                # Here we're just showing a placeholder since the sample data has dummy image data
+                                st.image("https://via.placeholder.com/300x200?text=Keyframe+ID+%s" % keyframe_id, 
+                                         caption=f"Keyframe {int(keyframe_id)}", use_container_width=True)
+                            except Exception as e:
+                                st.warning(f"Error loading keyframe {int(keyframe_id)}: {e}")
+            else:
+                st.info("No detailed data available for this date.")
+        else:
+            st.warning("No detection data found for the selected date.")
+            
+    except Exception as e:
+        st.error(f"Error fetching detailed detection data: {e}")
+        logger.error(f"Error in display_detailed_detection_data: {str(e)}")
+
+def get_date_range_options():
+    """Get preset date range options for the chart"""
+    today = datetime.now().date()
+    
+    return [
+        {"label": "Last 7 days", "days": 7},
+        {"label": "Last 30 days", "days": 30},
+        {"label": "Last 90 days", "days": 90},
+        {"label": "Year to date", "days": (today - datetime(today.year, 1, 1).date()).days},
+        {"label": "All time", "days": 9999}  # A large number to ensure all data is included
+    ]
+
+def filter_date_range(df, days=30):
+    """Filter dataframe to only include dates within the specified number of days"""
+    if df.empty or days >= 9999:
+        return df
+        
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days)
+    
+    # Convert detection_date to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df["detection_date"]):
+        df["detection_date"] = pd.to_datetime(df["detection_date"])
+    
+    # Filter to the date range
+    mask = (df["detection_date"].dt.date >= start_date) & (df["detection_date"].dt.date <= end_date)
+    return df[mask].copy()
+
+def fill_missing_dates(df, days=30):
+    """Fill in missing dates in the dataframe with zero counts"""
+    if df.empty:
+        return df
+        
+    # Ensure detection_date is datetime
+    if not pd.api.types.is_datetime64_any_dtype(df["detection_date"]):
+        df["detection_date"] = pd.to_datetime(df["detection_date"])
+    
+    # Get the date range
+    if days >= 9999:
+        # Use the min/max from the data
+        start_date = df["detection_date"].min().date()
+        end_date = df["detection_date"].max().date()
     else:
-        # Just create a placeholder chart with sample data
-        sample_data = {
-            'time': pd.date_range(start='2023-01-01', periods=10, freq='h'),
-            'detections': np.random.randint(0, 20, 10)
-        }
-        df_sample = pd.DataFrame(sample_data).set_index('time')
-        st.line_chart(df_sample)
-        st.caption("Sample data shown. Waiting for real detection data...")
+        # Use the specified number of days
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+    
+    # Create a continuous date range
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    
+    # Create a dataframe with all dates
+    all_dates = pd.DataFrame({"detection_date": date_range})
+    
+    # Convert df dates to date only (no time component) for proper merging
+    df_dates = df.copy()
+    df_dates["detection_date"] = df_dates["detection_date"].dt.date
+    df_dates["detection_date"] = pd.to_datetime(df_dates["detection_date"])
+    
+    # Merge with the original data
+    merged = pd.merge(all_dates, df_dates, on="detection_date", how="left")
+    
+    # Fill missing values with zeros
+    merged["detection_count"] = merged["detection_count"].fillna(0)
+    
+    return merged.sort_values("detection_date")
+
+def debug_database_connection():
+    """Function to debug database connection and data"""
+    st.markdown("---")
+    st.markdown("### Database Connection Debugger")
+    
+    # Add a call to our new debug function
+    debug_detection_chart_data()
+    
+    # Button to test the daily detection counts query specifically
+    if st.button("🔍 Test Detection Counts Query"):
+        st.subheader("Detection Counts Query Test")
+        
+        try:
+            # Test the exact query used in the chart
+            query = """
+            SELECT DATE(timestamp) AS detection_date, 
+                   SUM(num_detections) AS detection_count
+            FROM detections
+            GROUP BY detection_date
+            ORDER BY detection_date ASC;
+            """
+            
+            df = pd.read_sql(query, engine)
+            
+            if not df.empty:
+                st.success(f"✅ Query successful! Found {len(df)} dates with detection data.")
+                
+                # Convert dates for display
+                if not pd.api.types.is_datetime64_any_dtype(df["detection_date"]):
+                    df["detection_date"] = pd.to_datetime(df["detection_date"])
+                
+                # Show summary statistics
+                st.write(f"Date range: {df['detection_date'].min().date()} to {df['detection_date'].max().date()}")
+                st.write(f"Total detections: {int(df['detection_count'].sum())}")
+                
+                # Check for date gaps
+                all_dates = pd.date_range(start=df['detection_date'].min(), end=df['detection_date'].max())
+                missing_dates = [d for d in all_dates if d not in df['detection_date'].values]
+                
+                if missing_dates:
+                    st.warning(f"⚠️ Found {len(missing_dates)} gaps in the date sequence.")
+                    if len(missing_dates) < 10:
+                        st.write("Missing dates:", [d.date() for d in missing_dates])
+                    else:
+                        st.write("First few missing dates:", [d.date() for d in missing_dates[:5]])
+                else:
+                    st.success("✅ No gaps in the date sequence.")
+                
+                # Display the data
+                st.dataframe(df, use_container_width=True)
+                
+                # Create a simple chart to visualize the data
+                fig = px.line(
+                    df, 
+                    x='detection_date', 
+                    y='detection_count',
+                    title="Detection Counts from Direct Query",
+                    markers=True
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+            else:
+                st.warning("⚠️ Query returned no data.")
+                
+        except Exception as e:
+            st.error(f"❌ Query failed: {e}")
+    
+    with st.expander("Database Connection Details", expanded=False):
+        st.code(f"Database URI: {DB_URI.replace(DB_PASSWORD, '********')}")
+        
+        # Test the connection
+        try:
+            # Check if we can connect
+            test_query = "SELECT 1"
+            result = pd.read_sql(test_query, engine)
+            st.success("✅ Database connection successful")
+            
+            # Check the tables
+            tables_query = "SHOW TABLES"
+            tables = pd.read_sql(tables_query, engine)
+            st.write("Available tables:")
+            st.dataframe(tables)
+            
+            # Get table row counts
+            st.write("Table row counts:")
+            counts = {}
+            for table in tables.iloc[:, 0]:
+                count_query = f"SELECT COUNT(*) as count FROM {table}"
+                count = pd.read_sql(count_query, engine).iloc[0]['count']
+                counts[table] = count
+            
+            counts_df = pd.DataFrame(list(counts.items()), columns=['Table', 'Row Count'])
+            st.dataframe(counts_df)
+            
+        except Exception as e:
+            st.error(f"❌ Database connection error: {e}")
+            
+    with st.expander("Detection Data Sample", expanded=False):
+        try:
+            # Get a sample of detection data
+            sample_query = """
+            SELECT * FROM detections 
+            ORDER BY timestamp DESC 
+            LIMIT 10
+            """
+            sample = pd.read_sql(sample_query, engine)
+            
+            if not sample.empty:
+                st.write("Recent detections sample:")
+                st.dataframe(sample)
+                
+                # Get date range
+                range_query = """
+                SELECT 
+                    MIN(DATE(timestamp)) as min_date,
+                    MAX(DATE(timestamp)) as max_date,
+                    COUNT(DISTINCT DATE(timestamp)) as date_count
+                FROM detections
+                """
+                date_range = pd.read_sql(range_query, engine)
+                
+                st.write("Date range in detections table:")
+                st.dataframe(date_range)
+                
+                # Check for null timestamps
+                null_query = "SELECT COUNT(*) as null_count FROM detections WHERE timestamp IS NULL"
+                null_count = pd.read_sql(null_query, engine).iloc[0]['null_count']
+                
+                if null_count > 0:
+                    st.warning(f"⚠️ Found {null_count} records with NULL timestamps")
+                else:
+                    st.success("✅ No NULL timestamps found")
+                
+            else:
+                st.warning("No detection data found")
+                
+        except Exception as e:
+            st.error(f"Error querying detection data: {e}")
+            
+    with st.expander("Run Custom SQL Query", expanded=False):
+        custom_query = st.text_area("Enter a custom SQL query:", 
+                                  "SELECT DATE(timestamp) as date, COUNT(*) as count FROM detections GROUP BY date ORDER BY date")
+        
+        if st.button("Run Query"):
+            try:
+                if custom_query.strip():
+                    result = pd.read_sql(custom_query, engine)
+                    st.write("Query results:")
+                    st.dataframe(result)
+                else:
+                    st.warning("Please enter a query")
+            except Exception as e:
+                st.error(f"Error executing query: {e}")
+                
+def debug_detection_chart_data():
+    """Debug the data flow for the detection chart"""
+    
+    with st.expander("Detection Chart Data Flow Debug", expanded=True):
+        # 1. Get raw data from database
+        st.subheader("1. Raw Database Query")
+        try:
+            query = """
+            SELECT DATE(timestamp) AS detection_date, 
+                   SUM(num_detections) AS detection_count  -- Sum detections per date
+            FROM detections
+            GROUP BY detection_date
+            ORDER BY detection_date ASC;
+            """
+            raw_df = pd.read_sql(query, engine)
+            
+            if not raw_df.empty:
+                # Convert to datetime for consistent handling
+                if not pd.api.types.is_datetime64_any_dtype(raw_df["detection_date"]):
+                    raw_df["detection_date"] = pd.to_datetime(raw_df["detection_date"])
+                
+                st.write(f"Raw data has {len(raw_df)} rows")
+                st.dataframe(raw_df, use_container_width=True)
+                
+                # Check Feb 16th specifically
+                feb16 = raw_df[raw_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
+                if not feb16.empty:
+                    st.success(f"✅ Feb 16th data found: {feb16['detection_count'].values[0]} detections")
+                else:
+                    st.warning("⚠️ Feb 16th data not found in raw query!")
+            else:
+                st.warning("No data returned from database")
+        except Exception as e:
+            st.error(f"Error executing raw query: {e}")
+        
+        # 2. Check data after date filtering
+        st.subheader("2. After Date Filtering")
+        days_to_display = 30  # Default filter
+        
+        try:
+            # Filter to date range
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=days_to_display)
+            
+            if not raw_df.empty:
+                # Apply the same filter used in the chart
+                mask = (raw_df["detection_date"].dt.date >= start_date) & (raw_df["detection_date"].dt.date <= end_date)
+                filtered_df = raw_df[mask].copy()
+                
+                st.write(f"After filtering: {len(filtered_df)} rows")
+                st.dataframe(filtered_df, use_container_width=True)
+                
+                # Check Feb 16th specifically
+                feb16 = filtered_df[filtered_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
+                if not feb16.empty:
+                    st.success(f"✅ Feb 16th still present after filtering: {feb16['detection_count'].values[0]} detections")
+                else:
+                    st.warning("⚠️ Feb 16th filtered out!")
+            
+        except Exception as e:
+            st.error(f"Error in date filtering: {e}")
+        
+        # 3. Check after filling gaps
+        st.subheader("3. After Filling Gaps")
+        try:
+            if 'filtered_df' in locals() and not filtered_df.empty:
+                # Create continuous date range
+                date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+                
+                # Create dataframe with all dates
+                all_dates = pd.DataFrame({"detection_date": date_range})
+                
+                # Merge with filtered data
+                filtered_df_date_only = filtered_df.copy()
+                filtered_df_date_only["detection_date"] = filtered_df_date_only["detection_date"].dt.date
+                filtered_df_date_only["detection_date"] = pd.to_datetime(filtered_df_date_only["detection_date"])
+                
+                merged_df = pd.merge(all_dates, filtered_df_date_only, on="detection_date", how="left")
+                merged_df["detection_count"] = merged_df["detection_count"].fillna(0)
+                
+                st.write(f"After filling gaps: {len(merged_df)} rows")
+                st.dataframe(merged_df, use_container_width=True)
+                
+                # Check Feb 16th specifically
+                feb16 = merged_df[merged_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
+                if not feb16.empty:
+                    st.write(f"Feb 16th after gap filling: {feb16['detection_count'].values[0]} detections")
+                    
+                    # If it's zero but should have data, there's a merge problem
+                    if feb16['detection_count'].values[0] == 0:
+                        st.error("⚠️ Feb 16th data was LOST during the merge/gap filling process!")
+                        
+                        # Check the specific format of the dates to see if there's a mismatch
+                        st.write("Date format in filtered_df:")
+                        if not filtered_df.empty:
+                            feb16_filtered = filtered_df[filtered_df['detection_date'].dt.strftime('%Y-%m-%d') == '2025-02-16']
+                            if not feb16_filtered.empty:
+                                st.write(f"Feb 16th original date value: {feb16_filtered['detection_date'].iloc[0]}")
+                                st.write(f"Date type: {type(feb16_filtered['detection_date'].iloc[0])}")
+                            
+                        st.write("Date format in date_range:")
+                        feb16_idx = (date_range.strftime('%Y-%m-%d') == '2025-02-16')
+                        if feb16_idx.any():
+                            st.write(f"Feb 16th in date_range: {date_range[feb16_idx][0]}")
+                            st.write(f"Date type: {type(date_range[feb16_idx][0])}")
+                else:
+                    st.error("⚠️ Feb 16th missing from the filled dataset!")
+        except Exception as e:
+            st.error(f"Error in gap filling: {e}")
