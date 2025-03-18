@@ -1,7 +1,42 @@
-streamlit==1.30.0
+# Core dependencies
+streamlit==1.25.0
 pandas==2.0.3
 numpy==1.24.3
+
+# Data visualization
+altair==5.1.2
+plotly==5.18.0
+plotly-express==0.4.1
+matplotlib==3.8.0
+streamlit-plotly-events==0.0.6
+
+# Mapping
 folium==0.14.0
 streamlit-folium==0.13.0
-altair==5.1.2
+
+# Image processing
+pillow==10.0.0
+
+# Network and API
 requests==2.31.0
+socket==0.1.0
+threading
+
+# Database
+pymysql==1.0.3
+sqlalchemy==2.0.23
+
+# Date and time
+datetime
+pytz==2023.3
+
+# Utilities
+logging
+queue
+json
+io
+
+# System
+atexit
+os
+time

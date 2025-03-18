@@ -31,6 +31,44 @@ def setup_logging():
     
     return logger, log_file
 
+def create_dashboard_ui_with_debug(receiver, log_file):
+    """Create the dashboard UI with debug mode option"""
+    
+    # Add a debug mode flag in query parameters
+    query_params = st.query_params
+    debug_mode = 'debug' in query_params and query_params['debug'][0].lower() == 'true'
+    
+    # Create regular dashboard UI
+    create_dashboard_ui(receiver, log_file)
+    
+    # Add debug section if in debug mode
+    if debug_mode:
+        st.markdown("---")
+        st.subheader("🔍 Debug Mode Enabled")
+        
+        debug_tab1, debug_tab2 = st.tabs(["Database Debug", "Session State"])
+        
+        with debug_tab1:
+            from dashboard_ui import debug_database_connection
+            debug_database_connection()
+            
+        with debug_tab2:
+            st.write("Current Session State Variables:")
+            
+            # Show relevant session state variables
+            debug_vars = {
+                'devices': len(st.session_state.get('devices', {})),
+                'device_ips': st.session_state.get('device_ips', {}),
+                'detection_history': f"{len(st.session_state.get('detection_history', []))} entries",
+                'receiver_status': {
+                    k: v for k, v in st.session_state.get('receiver_status', {}).items() 
+                    if k != 'active_devices' and k != 'last_connection_time'
+                },
+                'active_devices': list(st.session_state.get('receiver_status', {}).get('active_devices', [])),
+            }
+            
+            st.json(debug_vars)
+
 # Main function to run the dashboard
 def main():
     # Set up logging
@@ -62,8 +100,8 @@ def main():
     # Process all queues - do this in the main thread
     process_queues()
     
-    # Create the dashboard UI
-    create_dashboard_ui(receiver, log_file)
+    # Create the dashboard UI with debug option
+    create_dashboard_ui_with_debug(receiver, log_file)
     
     # Register cleanup
     import atexit
@@ -73,6 +111,7 @@ def main():
             logger.info("Dashboard shutting down, receiver stopped")
             
     atexit.register(cleanup)
+
 
 # Custom CSS styling
 def apply_custom_css():
