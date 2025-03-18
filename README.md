@@ -1,353 +1,306 @@
 # Waste Detection System
 
-This project consists of two main components:
-1. A Raspberry Pi-based edge device for waste detection using computer vision
-2. A central monitoring dashboard that aggregates data from multiple edge devices
+A distributed system for detecting, monitoring, and analyzing waste using computer vision and IoT technologies.
+
+## System Overview
+
+The Waste Detection System is an integrated solution that uses edge devices with cameras to detect waste items, stores detection data in a central database, and provides real-time monitoring through an interactive dashboard.
+
+![System Architecture Diagram](docs/system-architecture.png)
+
+## Key Components
+
+The system consists of three main components, each in their own directory:
+
+1. **Edge Devices (`/pi`)** - Raspberry Pi cameras that capture and analyze waste
+2. **Database (`/waste-db`)** - Central database for persistent storage of detection data
+3. **Dashboard (`/waste-dashboard`)** - Real-time monitoring interface for visualization
+
+## Repository Structure
+
+```
+waste-detection-system/
+├── README.md                 # This main README file
+├── docs/                     # Documentation and diagrams
+│   └── system-architecture.png
+│
+├── pi/                       # Edge device code
+│   ├── README.md             # Pi-specific documentation
+│   ├── pi-capture-detect.py  # Main detection script
+│   └── requirements.txt      # Pi dependencies
+│
+├── waste-db/                 # Database component
+│   ├── README.md             # Database documentation
+│   ├── schema.sql            # Database schema
+│   └── modified-db-receiver.py # Database receiver script
+│
+└── waste-dashboard/          # Dashboard application
+    ├── README.md             # Dashboard documentation
+    ├── main.py               # Dashboard entry point
+    ├── dashboard_ui.py       # Dashboard UI components
+    ├── data_receiver.py      # Data receiver for dashboard
+    ├── state_manager.py      # State management
+    ├── utils.py              # Utility functions
+    └── requirements.txt      # Dashboard dependencies
+```
 
 ## System Architecture
 
-```
-┌─────────────────┐         ┌─────────────────────┐
-│  Raspberry Pi   │         │   Central Server    │
-│  Edge Device    │◄────────┤   Dashboard         │
-│  (waste detection)│        │   (data aggregation) │
-└─────────────────┘         └─────────────────────┘
-```
+### Data Flow
 
-The system uses:
-- Roboflow for computer vision-based waste detection
-- Flask for the Pi's video streaming server
-- Streamlit for the central dashboard UI
-- TCP sockets for device-to-dashboard communication
+1. **Capture & Detection**:
+   - Edge devices (Raspberry Pi) capture images using camera modules
+   - On-device processing detects waste items using computer vision
+   - Detection results include waste type, location, and confidence scores
 
-## Raspberry Pi Edge Device
+2. **Data Transmission**:
+   - Edge devices send detection data to both the dashboard (for real-time display) and database (for storage)
+   - Detection data is transmitted via TCP sockets in JSON format
+   - Image data for detections is base64-encoded and sent to the database
 
-The edge device runs computer vision algorithms to detect waste items in camera feeds, then transmits the detection data to the central dashboard.
+3. **Visualization & Analytics**:
+   - Dashboard displays real-time device status and detection data
+   - Historical data is retrieved from the database for trend analysis
+   - Live video feeds can be viewed directly from edge devices
 
-### Files
-- `pi-wastedetect.py` - Main edge device application
+4. **Storage & Persistence**:
+   - MariaDB database stores all detection data, device information, and detection images
+   - Data is organized for efficient querying and historical analysis
 
-### Setup Requirements
+### Communication Protocols
 
-1. Hardware:
-   - Raspberry Pi (3B+ or 4 recommended)
-   - Camera module or USB webcam
-   - (Optional) Gas sensor
+| Connection | Protocol | Port | Data Format |
+|------------|----------|------|------------|
+| Edge Device → Dashboard | TCP Socket | 5001 | JSON |
+| Edge Device → Database | TCP Socket | 5002 | JSON + base64 images |
+| Dashboard → Database | SQL | 3306 | SQL queries |
+| User → Edge Device | HTTP | 8000 | HTML/MJPEG |
+| User → Dashboard | HTTP | 8501 | HTML/Streamlit |
 
-2. Software Dependencies:
-   ```
-   pip install flask opencv-python roboflow inference
-   ```
+### Network Requirements
 
-3. Configuration:
-   - Update `DASHBOARD_IP` in `pi-wastedetect.py` to point to your laptop's IP address
-     ```python
-     # Line 20 in pi-wastedetect.py
-     DASHBOARD_IP = "192.168.18.107"  # Change this to your dashboard computer's IP
-     DASHBOARD_PORT = 5001  # Default port, change if needed
-     ```
-   - Set a unique `DEVICE_ID` for each Pi device
-     ```python
-     # Line 21 in pi-wastedetect.py
-     DEVICE_ID = "RaspberryPi"  # Change to a unique name for each device
-     ```
-   - Ensure your Roboflow API key is valid
-     ```python
-     # Line 23 in pi-wastedetect.py
-     ROBOFLOW_API_KEY = "apikey"  # Your Roboflow API key
-     MODEL_ID = "yolo-waste-detection/1"  # Roboflow model
-     ```
+- All components must be on the same network or have appropriate routing
+- Firewall rules must allow the specified ports
+- Edge devices require stable network connections
+- The dashboard server should have a static IP for edge devices to connect reliably
 
-### Running the Edge Device
+## Component Details
 
-```bash
-python pi-wastedetect.py
-```
+### Edge Devices (Raspberry Pi)
 
-The Pi will:
-- Start a Flask web server on port 8000
-- Connect to Roboflow for waste detection
-- Stream video feed with detected waste items highlighted
-- Send detection data to the central dashboard
-- Provide a status endpoint at `/status`
+Each Raspberry Pi runs detection software that:
+- Captures images using the Pi Camera Module
+- Performs waste detection using color-based computer vision
+- Provides a web interface for viewing the live feed
+- Transmits detection data to the central system
 
-## Central Dashboard
+**Key Files:**
+- `pi-capture-detect.py` - The main detection script
 
-The dashboard aggregates data from all connected edge devices, displays their locations, shows detection statistics, and allows viewing live video feeds.
+See the [Pi README](/pi/README.md) for detailed setup and configuration instructions.
 
-### Files
-- `main.py` - Entry point that loads configuration and starts the dashboard
-- `dashboard_ui.py` - The Streamlit UI components and layout
-- `data_receiver.py` - The `DataReceiver` class for handling device connections
-- `state_manager.py` - Functions for managing session state and data processing
-- `utils.py` - Utility functions (device discovery, status checking, etc.)
-- `dashboard_uiv2-networking.py` - Alternative dashboard UI 
-- `requirements.txt` - Required Python packages
+### Database
 
-### Setup Requirements
+The MariaDB database is the central storage component that:
+- Receives and stores detection data from edge devices
+- Saves detection images for verification and analysis
+- Provides historical data for dashboard visualization
+- Tracks device status and network information
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+**Key Files:**
+- `modified-db-receiver.py` - Receives data from edge devices
+- `schema.sql` - Database schema definition
 
-2. Network Configuration:
-   - Ensure the laptop and Pi are on the same network
-   - The dashboard listens on port 5001 for device connections by default
-   - The dashboard automatically binds to all network interfaces (0.0.0.0)
-   - You can verify your laptop's IP address using:
-     ```bash
-     # On Windows
-     ipconfig
-     
-     # On macOS/Linux
-     ifconfig
-     # or
-     ip addr
-     ```
-   - The dashboard will display its IP addresses in the sidebar, which you should use to configure the Pi devices
-
-### Running the Dashboard
-
-```bash
-streamlit run main.py
-```
-
-The dashboard will be available at `http://localhost:8501` by default.
-
-## Features
-
-### Edge Device (Pi)
-- Real-time waste detection using computer vision
-- Live video streaming with detection overlays
-- Automatic reconnection to dashboard
-- Status API endpoint
-- Web UI at http://pi-ip:8000/
+See the [Database README](/waste-db/README.md) for detailed setup and configuration instructions.
 
 ### Dashboard
-- Real-time monitoring of waste detection from multiple devices
-- Interactive map showing device locations and status
-- Live video feeds from detection devices
-- Historical data visualization
-- Network device discovery
-- System status monitoring
-- Connection logging
 
-## Network Configuration
+The Streamlit dashboard is the user interface that:
+- Displays real-time detection information
+- Shows device locations on an interactive map
+- Provides access to live video feeds
+- Visualizes historical data and trends
+- Monitors system health and connectivity
 
-### Connection Options
+**Key Files:**
+- `main.py` - Dashboard entry point
+- `dashboard_ui.py` - UI components and layout
+- `data_receiver.py` - Receives data from edge devices
 
-You can connect the Pi and dashboard computer in two main ways:
+See the [Dashboard README](/waste-dashboard/README.md) for detailed setup and configuration instructions.
 
-#### Option 1: Same Local Network
-Connect both devices to the same WiFi or Ethernet network. This is the simplest option for multiple devices.
+## Installation
 
-#### Option 2: Direct Ethernet Connection
-You can directly connect the Pi to your laptop using an Ethernet cable. This creates a dedicated connection between the two devices:
+Each component has its own installation instructions in its respective README file. For a complete system setup, follow these steps:
 
-1. Connect an Ethernet cable directly from the Pi to your laptop
-2. Configure static IP addresses on both devices (described below)
-3. No router or internet connection is required for this setup
+1. Set up the database server first
+2. Set up the dashboard server
+3. Configure and deploy edge devices
 
-### Finding Your IP Addresses
+## Initial Setup
 
-For the system to function properly, you need to correctly configure IP addresses:
+### 1. Database Setup
 
-1. **On the Dashboard Computer (Laptop):**
-   
-   The dashboard will display its IP addresses in the sidebar. Use one of these addresses to configure your Pi devices.
-   
-   If you need to manually find your IP:
-   
-   ```bash
-   # Windows
-   ipconfig
-   
-   # macOS/Linux
-   ifconfig
-   # or
-   ip addr
-   ```
-   
-   Look for the IP address on the same network as your Pi devices (usually starts with 192.168.x.x or 10.0.x.x)
+```bash
+cd waste-db
+# Follow instructions in the database README
+```
 
-2. **On the Raspberry Pi:**
-   
-   Update the `DASHBOARD_IP` variable in `pi-wastedetect.py`:
-   
-   ```python
-   # Configuration
-   DASHBOARD_IP = "192.168.18.107"  # Change to your laptop's IP address
-   ```
-   
-   To find the Pi's IP address (useful for viewing the video feed):
-   
-   ```bash
-   hostname -I
-   ```
+### 2. Dashboard Setup
 
-### Setting Up Direct Ethernet Connection
+```bash
+cd waste-dashboard
+# Follow instructions in the dashboard README
+```
 
-For a direct Ethernet connection between laptop and Pi (no router):
+### 3. Edge Device Setup
 
-1. **On the Raspberry Pi:**
-   
-   Edit the network configuration:
-   ```bash
-   sudo nano /etc/dhcpcd.conf
-   ```
-   
-   Add these lines at the end of the file:
-   ```
-   interface eth0
-   static ip_address=192.168.4.2/24
-   ```
-   
-   Then restart the networking service:
-   ```bash
-   sudo service dhcpcd restart
-   ```
+```bash
+cd pi
+# Follow instructions in the Pi README
+```
 
-2. **On your laptop:**
-   
-   - **Windows:**
-     - Open Network and Sharing Center
-     - Click on the Ethernet connection
-     - Click Properties
-     - Select Internet Protocol Version 4 (TCP/IPv4)
-     - Click Properties
-     - Select "Use the following IP address"
-     - Set IP address: 192.168.4.1
-     - Set Subnet mask: 255.255.255.0
-     - Leave default gateway empty
-     - Click OK
-   
-   - **macOS:**
-     - Open System Preferences > Network
-     - Select Ethernet connection
-     - Set Configure IPv4: Manually
-     - Set IP Address: 192.168.4.1
-     - Set Subnet Mask: 255.255.255.0
-     - Leave Router field empty
-     - Click Apply
-   
-   - **Linux:**
-     ```bash
-     sudo ip addr add 192.168.4.1/24 dev eth0
-     ```
+## Configuration
 
-3. **Update `pi-wastedetect.py`:**
-   
-   Change the `DASHBOARD_IP` to match your laptop's static IP:
-   ```python
-   DASHBOARD_IP = "192.168.4.1"
-   ```
+Each component needs to be configured to communicate with the others:
 
-4. **Test the connection:**
-   
-   On the laptop:
-   ```bash
-   ping 192.168.4.2
-   ```
-   
-   On the Pi:
-   ```bash
-   ping 192.168.4.1
-   ```
+1. **Edge Devices** must be configured with:
+   - Dashboard server IP address and port
+   - Database server IP address and port
+   - Unique device identifier
 
-### Port Configuration
+2. **Database Receiver** must be configured with:
+   - Database connection details
+   - Listening port for data from edge devices
 
-- The dashboard listens on **port 5001** for incoming device connections
-- The Pi runs a web server on **port 8000** for the video feed
-- The Streamlit dashboard interface runs on **port 8501** by default
+3. **Dashboard** must be configured with:
+   - Database connection details
+   - Listening port for data from edge devices
 
-If you need to change these ports:
+See each component's README for specific configuration instructions.
 
-1. For the dashboard receiver port:
-   ```python
-   # In data_receiver.py
-   def __init__(self, host='0.0.0.0', port=5001):  # Change port here
-   ```
+## Deployment Scenarios
 
-2. For the Pi's video server port:
-   ```python
-   # In pi-wastedetect.py
-   VIDEO_PORT = 8000  # Change port here
-   ```
+### Small-Scale Deployment
+
+For monitoring a small area with 1-3 edge devices:
+- Run the database and dashboard on the same server
+- Deploy Raspberry Pi devices at key monitoring points
+- Use standard WiFi for connectivity
+
+### Medium-Scale Deployment
+
+For monitoring multiple areas with 5-10 edge devices:
+- Run the database and dashboard on separate servers
+- Use wired connections for critical edge devices
+- Consider database optimization for increased data volume
+
+### Large-Scale Deployment
+
+For monitoring large areas with 10+ edge devices:
+- Implement load balancing for the dashboard
+- Use database clustering for high availability
+- Consider edge device redundancy at critical points
+- Implement message queuing for more robust data transmission
+- Set up monitoring for system health
 
 ## Troubleshooting
 
-### Edge Device Issues
-1. **Camera not found**: Check if the camera is properly connected and if the correct camera index is used (default: 0)
-2. **Cannot connect to dashboard**: Verify the `DASHBOARD_IP` is correct and the dashboard is running
-3. **Roboflow errors**: Ensure your API key is valid and you have access to the specified model
+### System-Wide Issues
 
-### Dashboard Issues
-1. **No devices showing up**: 
-   - Check that your Pi is running and configured with the correct dashboard IP
-   - Use the "Discover Devices" button in the sidebar
-   - Check firewall settings to ensure port 5001 is open
-   - Verify network connectivity between Pi and laptop with ping:
-     ```bash
-     # From Pi to laptop
-     ping 192.168.x.x  # your laptop IP
-     
-     # From laptop to Pi
-     ping 192.168.x.x  # your Pi IP
-     ```
-   - Check that both devices are on the same subnet (typically the first three numbers of the IP address should match)
+1. **Communication Failures**:
+   - Verify network connectivity between all components
+   - Check IP addresses and port configurations
+   - Ensure firewalls allow required connections
 
-2. **Can't see video feed**: 
-   - Verify the Pi's video server is running
-   - Check if port 8000 on the Pi is accessible from your laptop
-   - Try accessing the Pi's web interface directly in a browser:
-     ```
-     http://PI_IP_ADDRESS:8000/
-     ```
-   - If using Windows, check Windows Defender Firewall settings for blocking
-   - On Linux/macOS, check if any firewall is blocking with:
-     ```bash
-     sudo iptables -L
-     ```
+2. **Data Inconsistencies**:
+   - Check timestamps across different system components
+   - Verify data transmission from edge devices to both dashboard and database
 
-3. **IP address configuration errors**:
-   - The dashboard shows its detected IP addresses in the sidebar
-   - If your network uses multiple adapters, ensure you're using the correct IP from the same network as the Pi
-   - If using a VPN, try disconnecting as it can interfere with local network discovery
-   - For testing on the same machine, you can use `127.0.0.1` as the `DASHBOARD_IP` in Pi code
+3. **Performance Issues**:
+   - Monitor resource usage on all components
+   - Consider scaling up hardware for bottlenecked components
+   - Optimize database queries and indexes
 
-4. **Direct Ethernet connection issues**:
-   - If using a direct Ethernet connection, make sure both IP addresses are on the same subnet (e.g., 192.168.4.x)
-   - Some laptops may disable the Ethernet port when no DHCP server is detected - you'll need to manually set a static IP
-   - Check if the Ethernet interface is actually up with:
-     ```bash
-     # On Pi
-     ifconfig eth0
-     
-     # On Linux/macOS
-     ifconfig eth0
-     
-     # On Windows
-     ipconfig
-     ```
-   - Try restarting the network interface on the Pi:
-     ```bash
-     sudo ifdown eth0 && sudo ifup eth0
-     ```
-   - Make sure you're not using the same IP address on both devices
-   - If the direct connection works but the software doesn't detect devices, try manually adding the IP in the dashboard sidebar
+See each component's README for component-specific troubleshooting.
 
-## Development and Extension
+## System Maintenance
 
-### Adding New Edge Devices
-1. Clone the Pi setup to a new device
-2. Update the `DEVICE_ID` in `pi-wastedetect.py`
-3. The dashboard will automatically detect and add the new device
+### Regular Maintenance Tasks
 
-### Customizing the Dashboard
-- Modify `dashboard_ui.py` to change the layout or add new visualizations
-- Update `state_manager.py` to process additional data from edge devices
+1. **Database Backup**:
+   ```bash
+   # Backup the database (from waste-db directory)
+   ./backup-database.sh
+   ```
+
+2. **Log Rotation**:
+   - All components use dated log files
+   - Set up log rotation to prevent disk space issues:
+   ```bash
+   sudo logrotate -f /etc/logrotate.d/waste-detection
+   ```
+
+3. **Updates**:
+   - Keep all components and dependencies updated
+   - Test updates in staging environment before production
+
+### Scaling and Expansion
+
+To add more edge devices:
+1. Set up new Raspberry Pi hardware
+2. Install the edge device software
+3. Configure with unique device IDs
+4. Update dashboard map coordinates if needed
+
+## Security Considerations
+
+1. **Authentication**: Implement proper authentication for all user interfaces
+2. **Encryption**: Use SSL/TLS for all communications
+3. **Access Control**: Limit network access to required ports and services
+4. **Secure Passwords**: Use strong passwords for database and system accounts
+5. **Updates**: Keep all components updated with security patches
+
+## Future Enhancements
+
+Potential improvements to the system:
+
+1. **Advanced Detection**:
+   - Implement machine learning models for more accurate waste classification
+   - Add object tracking for moving waste items
+
+2. **System Integration**:
+   - Integration with waste collection scheduling systems
+   - Alerting and notification systems for critical detections
+
+3. **Analytics Expansion**:
+   - Predictive analytics for waste hotspots
+   - Seasonal trend analysis
+
+4. **Hardware Enhancements**:
+   - Support for additional sensors (pollution, sound, etc.)
+   - Integration with autonomous collection vehicles
+
+## Contributing
+
+Contributions to the Waste Detection System are welcome. Please follow these steps:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-MIT
+[License information here]
+
+## Contact
+
+[Contact information here]
+
+## Acknowledgments
+
+- Contributors and team members
+- Organizations and funding sources
+- Open-source libraries and tools used
