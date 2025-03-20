@@ -26,8 +26,8 @@ The Waste Detection Dashboard is the central visualization and monitoring compon
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/waste-detection-dashboard.git
-cd waste-detection-dashboard
+git clone https://github.com/your-username/waste-detection-system.git
+cd waste-detection-system/waste-dashboard
 ```
 
 ### 2. Set Up Python Environment
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 
 ### 3. Set Up Database
 
-Ensure you have MariaDB installed and running. Then create the required database schema (see the MariaDB README for detailed instructions).
+Ensure you have MariaDB installed and running. See the [Database Setup Guide](../waste-db/db-README.md) for detailed instructions.
 
 ## Configuration
 
@@ -277,11 +277,3 @@ Potential improvements for the dashboard:
 4. Advanced analytics and prediction features
 5. Integration with waste management systems
 6. Report generation and export functionality
-
-## License and Credits
-
-This software is part of the Waste Detection System.
-
-## Support
-
-For issues or questions, check the logs first, then consult the project documentation.
