@@ -27,7 +27,7 @@ The Waste Detection System consists of three primary components:
 
 ## System Architecture
 
-![Waste Detection System Architecture](docs/system-architecture.PNG)
+![Waste Detection System Architecture](docs/system-architecture.png)
 
 *The architecture diagram illustrates the three main components and their interactions:*
 - **Edge Devices** (blue): Raspberry Pi units with cameras and detection software
