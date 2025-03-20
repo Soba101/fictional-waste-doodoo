@@ -66,14 +66,15 @@ Stores image data for detections.
 |--------|------|-------------|
 | keyframe_id | INT | Primary key - unique identifier for the keyframe |
 | detection_id | INT | Foreign key reference to detections table |
-| image_data | BLOB | Binary image data |
+| image_data | MEDIUMBLOB | Binary image data (JPEG format) |
 | image_format | VARCHAR(16) | Image format (jpg, png, etc.) |
 
 ## Setup Instructions
 
 ### Prerequisites
-- MariaDB/MySQL server installed
+- MariaDB/MySQL server installed (version 10.5+ recommended)
 - Root or administrative access to the database server
+- Python 3.7+ with required packages (see requirements.txt)
 
 ### Database Creation
 
@@ -137,6 +138,88 @@ Stores image data for detections.
    );
    ```
 
+### Performance Optimizations
+
+For better performance, add the following indexes:
+
+```sql
+ALTER TABLE detections ADD INDEX idx_timestamp (timestamp);
+ALTER TABLE detections ADD INDEX idx_device_id (device_id);
+ALTER TABLE detected_items ADD INDEX idx_detection_id (detection_id);
+ALTER TABLE detected_items ADD INDEX idx_class (class_name);
+ALTER TABLE keyframes ADD INDEX idx_detection_id (detection_id);
+```
+
+## Database Receiver
+
+The database receiver (`modified-db-receiver.py`) acts as a bridge between edge devices and the MariaDB database. It:
+
+- Listens on port 5002 for incoming TCP connections
+- Processes JSON data from edge devices
+- Saves detection data, including JPEG images, to the database
+
+### Running the Database Receiver
+
+1. Ensure you have installed the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Configure the database connection in `modified-db-receiver.py`:
+   ```python
+   # Database configuration
+   DB_HOST = 'localhost'  # Change to your MariaDB server address if needed
+   DB_USER = 'waste_user'   # Update if your username is different
+   DB_PASSWORD = 'password' # Use your actual password
+   DB_NAME = 'waste_detection'
+   ```
+
+3. Run the receiver:
+   ```bash
+   python3 modified-db-receiver.py
+   ```
+
+4. The receiver will create a log file in the `logs` directory.
+
+### Expected JSON Format
+
+The database receiver expects JSON data in the following format:
+
+```json
+{
+  "device_id": "RaspberryPi5",
+  "ip_address": "192.168.1.100",
+  "timestamp": "2025-03-20T15:30:45.123456",
+  "num_detections": 3,
+  "gas_value": 120.5,
+  "lat": 1.3521,
+  "lon": 103.8198,
+  "predictions": [
+    {
+      "class": "plastic",
+      "confidence": 0.85,
+      "x": 0.4,
+      "y": 0.6,
+      "width": 0.2,
+      "height": 0.15
+    },
+    {
+      "class": "paper",
+      "confidence": 0.75,
+      "x": 0.7,
+      "y": 0.3,
+      "width": 0.15,
+      "height": 0.2
+    }
+  ],
+  "frame": "base64_encoded_jpeg_image_data"
+}
+```
+
+- The `frame` field is optional and contains a base64-encoded JPEG image
+- Coordinates (x, y, width, height) are normalized to the range 0.0-1.0
+- The receiver scales these to pixel coordinates assuming 640x480 images
+
 ## Connectivity
 
 ### From Python Applications
@@ -187,6 +270,14 @@ To back up the database:
 mysqldump -u waste_user -p waste_detection > waste_detection_backup_$(date +%Y%m%d).sql
 ```
 
+For automated backups, create a cron job:
+
+```bash
+# Add to crontab (run 'crontab -e')
+# Daily backup at 2:00 AM
+0 2 * * * mysqldump -u waste_user -p'password' waste_detection > /path/to/backups/waste_detection_$(date +\%Y\%m\%d).sql
+```
+
 ### Restore
 To restore from a backup:
 
@@ -194,20 +285,21 @@ To restore from a backup:
 mysql -u waste_user -p waste_detection < waste_detection_backup_file.sql
 ```
 
-### Optimizing Performance
-For better performance:
+### Database Maintenance
 
-1. Add indexes on frequently queried columns:
-   ```sql
-   ALTER TABLE detections ADD INDEX idx_timestamp (timestamp);
-   ALTER TABLE detections ADD INDEX idx_device_id (device_id);
-   ALTER TABLE detected_items ADD INDEX idx_class (class_name);
-   ```
+#### Optimizing Performance
 
-2. Configure MariaDB for better performance with blob storage if storing many images:
+1. Configure MariaDB for better performance with blob storage:
    ```
+   # Add to /etc/mysql/mariadb.conf.d/50-server.cnf
    innodb_buffer_pool_size = 256M
    innodb_log_file_size = 64M
+   max_allowed_packet = 64M
+   ```
+
+2. Regularly optimize tables:
+   ```sql
+   OPTIMIZE TABLE devices, detections, detected_items, keyframes;
    ```
 
 ## Troubleshooting
@@ -217,16 +309,28 @@ For better performance:
 1. **Connection refused**:
    - Verify MariaDB is running: `systemctl status mariadb`
    - Check bind-address in `/etc/mysql/mariadb.conf.d/50-server.cnf`
-   - Ensure firewall allows connections to port 3306
+   - Ensure firewall allows connections to port 3306: `sudo ufw allow 3306/tcp`
 
 2. **Access denied**:
    - Verify credentials in the application configuration
    - Check user permissions: `SHOW GRANTS FOR 'waste_user'@'%';`
+   - Reset user password if necessary: 
+     ```sql
+     ALTER USER 'waste_user'@'%' IDENTIFIED BY 'new_password';
+     FLUSH PRIVILEGES;
+     ```
 
 3. **Slow queries**:
    - Analyze slow queries: `SHOW PROCESSLIST;`
+   - Check query execution plan: `EXPLAIN SELECT * FROM detections WHERE...;`
    - Add appropriate indexes
    - Consider optimizing large JOIN operations
+
+4. **Database receiver not receiving data**:
+   - Check that the receiver is running: `ps aux | grep modified-db-receiver.py`
+   - Verify network connectivity: `telnet [db_server_ip] 5002`
+   - Check log files in the `logs` directory
+   - Restart the receiver: `python3 modified-db-receiver.py`
 
 ## Security Recommendations
 
@@ -234,28 +338,8 @@ For better performance:
 2. Limit user privileges to only what's necessary
 3. Restrict database access to specific IP addresses
 4. Enable SSL for database connections
-5. Regularly update MariaDB to the latest version
-6. Consider encrypting sensitive data in the database
-
-## Database Receiver
-
-The `modified-db-receiver.py` script acts as a bridge between the edge devices and the database. It:
-- Listens on port 5002 for incoming TCP connections
-- Processes JSON data from edge devices
-- Saves detection data, including images, to the MariaDB database
-
-To run the database receiver:
-```bash
-python3 modified-db-receiver.py
-```
-
-## Dashboard Database Access
-
-The dashboard application (`dashboard_ui.py`) connects to the database to:
-- Fetch detection counts for visualization
-- Retrieve detection details for display
-- Generate reports on waste types detected
-- Access keyframe images for visual confirmation
+5. Encrypt sensitive data in the database
+6. Implement regular security updates
 
 ## Additional Resources
 

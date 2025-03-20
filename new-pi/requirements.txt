@@ -1,0 +1,30 @@
+# Raspberry Pi Detection Requirements
+
+# Computer vision
+opencv-python==4.8.0
+numpy==1.24.3
+
+# Web server
+flask==2.3.3
+
+# Network and API
+requests==2.31.0
+
+# Raspberry Pi hardware
+gpiozero==2.0.0
+lgpio==0.1.0  # Required for gpiozero on Pi 5
+pyserial==3.5  # For GPS module serial connection
+
+# GPS data parsing
+pynmea2==1.19.0  # For GPS NMEA parsing
+
+# Standard library modules are included by default:
+# - logging
+# - socket
+# - threading
+# - time
+# - json
+# - base64
+# - datetime
+# - os
+# - subprocess

@@ -129,6 +129,16 @@ def process_queue_data():
                     "last_updated": timestamp
                 }
                 add_connection_log("New device added", f"Location: {lat}, {lon}", device_id)
+                
+                        # Update device location if provided in new data
+            if device_id in st.session_state.devices:
+                # Update GPS coordinates if provided and device has a GPS fix
+                if 'lat' in data and 'lon' in data:
+                    has_fix = data.get('has_gps_fix', False)
+                    if has_fix:  # Only update if GPS has a fix
+                        logger.info(f"Updating GPS for {device_id}: {data['lat']}, {data['lon']}")
+                        st.session_state.devices[device_id]["lat"] = data['lat']
+                        st.session_state.devices[device_id]["lon"] = data['lon']
             
             # *** IMPORTANT FIX: Always update the device IP when receiving data ***
             if 'device_ips' not in st.session_state:

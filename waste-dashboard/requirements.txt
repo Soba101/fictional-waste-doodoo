@@ -1,3 +1,5 @@
+# Dashboard Requirements
+
 # Core dependencies
 streamlit==1.25.0
 pandas==2.0.3
@@ -19,24 +21,23 @@ pillow==10.0.0
 
 # Network and API
 requests==2.31.0
-socket==0.1.0
-threading
 
 # Database
 pymysql==1.0.3
 sqlalchemy==2.0.23
+cryptography==41.0.3  # For secure database connections
 
 # Date and time
-datetime
 pytz==2023.3
 
-# Utilities
-logging
-queue
-json
-io
-
-# System
-atexit
-os
-time
+# Standard library modules are included by default:
+# - datetime
+# - logging
+# - queue
+# - json
+# - io
+# - socket
+# - threading
+# - atexit
+# - os
+# - time
