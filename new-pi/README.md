@@ -12,19 +12,15 @@ The Raspberry Pi edge device serves as the detection and sensing component of th
 4. Gas detection with MQ-2 sensor (optional)
 5. Communication with the central dashboard and database
 
-## Hardware Requirements
+## Hardware Setup
 
-### Required Components
-- Raspberry Pi 4 or 5
-- Raspberry Pi Camera Module (v2 or v3)
-- MicroSD Card (minimum 16GB, Class 10 recommended)
-- Power supply (3A recommended for Pi 4/5)
-- Network connectivity (WiFi or Ethernet)
+**⚠️ Important:** For detailed hardware wiring instructions, GPIO pinout, and component connections, please refer to the [HARDWARE.md](/new-pi/HARDWARE.md) document. This file provides comprehensive information about:
 
-### Optional Components
-- NEO-6M GPS module
-- MQ-2 Gas Sensor
-- Weatherproof case for outdoor deployment
+- Complete wiring diagrams
+- Raspberry Pi 5 GPIO layout
+- Specific connection details for the camera, GPS module, and gas sensor
+- Testing procedures for all hardware components
+- Troubleshooting hardware issues
 
 ## Software Prerequisites
 
@@ -89,25 +85,6 @@ DATABASE_PORT = 5002              # Database server port
 GPS_ENABLED = True    # Set to False if no GPS module
 GAS_ENABLED = True    # Set to False if no gas sensor
 ```
-
-### 4. Hardware Connections
-
-#### Camera Module
-Connect the camera module to the Raspberry Pi's camera port.
-
-#### GPS Module (Optional)
-Connect the NEO-6M GPS module:
-- VCC to 3.3V or 5V (check your module's specification)
-- GND to Ground
-- TX to GPIO15 (RX pin)
-- RX to GPIO14 (TX pin)
-
-#### MQ-2 Gas Sensor (Optional)
-Connect the MQ-2 gas sensor:
-- VCC to 5V
-- GND to Ground
-- DO (Digital Output) to GPIO17 (configurable in `config.py`)
-- AO (Analog Output) not used in this setup (digital only)
 
 ## Running the Waste Detection System
 
@@ -220,56 +197,29 @@ tail -f logs/pi_*.log
 
 ## Troubleshooting
 
-### Camera Issues
-1. Check camera connection
-2. Verify camera is enabled: `sudo raspi-config`
-3. Test camera with: `libcamera-still -o test.jpg`
-4. Check camera module output in logs
+If you encounter issues with the software components, check these common problems:
 
-### Network Connectivity
-1. Verify IP configuration with: `ip addr show`
-2. Test connection to dashboard: `ping <DASHBOARD_IP>`
-3. Test connection to database: `ping <DATABASE_IP>`
-4. Check firewall settings: `sudo iptables -L`
+### Application Startup Issues
+1. Verify Python dependencies are installed: `pip list`
+2. Check logs for specific error messages: `cat logs/pi_*.log`
+3. Test each module individually (see testing scripts in `test/` directory)
+4. Verify configuration in `config.py` matches your network setup
 
-### GPS Module
-1. Check serial connection: `ls -l /dev/ttyAMA0`
-2. Disable serial console if needed: `sudo raspi-config`
-3. Test GPS module with: `cat /dev/ttyAMA0`
-4. Ensure GPS has a clear view of the sky
+### Network Communication Issues
+1. Verify connectivity to dashboard: `ping <DASHBOARD_IP>`
+2. Check firewall settings: `sudo iptables -L`
+3. Verify correct IP addresses in `config.py`
+4. Ensure the dashboard and database servers are running
 
-### Gas Sensor
-1. Check GPIO connections
-2. Verify GPIO pin in config.py matches wiring
-3. Test GPIO connectivity: `gpiotest`
-4. Adjust the sensor potentiometer to calibrate sensitivity
+### Camera and Detection Issues
+1. Verify camera is working: `libcamera-still -o test.jpg`
+2. Check detection module configuration
+3. Test detection on a sample image
 
-## Maintenance
+**For hardware-specific troubleshooting**, see [HARDWARE.md](../HARDWARE.md).
 
-### Software Updates
-```bash
-# Update code from repository
-cd waste-detection-system
-git pull
+## Power Management
 
-# Update Python dependencies
-pip install -r requirements.txt
-```
-
-### System Monitoring
-Check system health with:
-```bash
-# CPU temperature
-vcgencmd measure_temp
-
-# CPU and memory usage
-htop
-
-# Disk usage
-df -h
-```
-
-### Power Management
 For reliable 24/7 operation:
 1. Use a stable power supply (minimum 3A)
 2. Consider a UPS for uninterrupted operation
@@ -279,29 +229,6 @@ For reliable 24/7 operation:
    # Add line: dtparam=watchdog=on
    sudo reboot
    ```
-
-## Energy Efficiency
-
-For battery-powered or solar deployments:
-1. Reduce frame rate: Set `CAMERA_FPS` to a lower value in `config.py`
-2. Disable optional components: Set `GPS_ENABLED = False` and/or `GAS_ENABLED = False`
-3. Reduce heartbeat frequency: Increase `HEARTBEAT_INTERVAL` in `config.py`
-4. Consider power-saving schedulers like `cron` to only run during specific times
-
-## Customization
-
-### Detection Tuning
-Adjust detection parameters in `detection_module.py`:
-- Modify color thresholds for different lighting conditions
-- Adjust minimum area for detection (default: 1000)
-- Change confidence calculation for different sensitivity
-
-### Adding New Sensors
-The modular design allows adding new sensors:
-1. Create a new module file (e.g., `humidity_sensor_module.py`)
-2. Implement the sensor interface with `start()`, `stop()`, and data retrieval methods
-3. Initialize in `main.py`
-4. Update the communication module to include new sensor data
 
 ## Security Considerations
 
