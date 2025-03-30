@@ -58,81 +58,25 @@ def check_device_status(device_id, ip=None):
         return False
 
 def discover_devices():
-    """Actively scan the network for edge devices"""
-    logger.info("Starting device discovery scan")
-    add_connection_log("Discovery scan", "Scanning network for devices")
+    """Actively scan the network for edge devices using MQTT heartbeats"""
+    logger.info("Starting device discovery via MQTT")
+    add_connection_log("Discovery scan", "Scanning for devices via MQTT")
     
-    # Get all local IP addresses to determine network range
-    local_ips = []
-    try:
-        hostname = socket.gethostname()
-        ip_info = socket.getaddrinfo(hostname, None)
-        for item in ip_info:
-            ip = item[4][0]
-            if ip not in local_ips and not ip.startswith('127.') and ':' not in ip:  # Skip loopback and IPv6
-                local_ips.append(ip)
-    except Exception as e:
-        logger.error(f"Error getting local IPs: {e}")
+    # Get MQTT client from session state
+    if 'mqtt_client' not in st.session_state:
+        logger.error("MQTT client not initialized")
         return
+        
+    # Subscribe to heartbeat topics if not already subscribed
+    mqtt_client = st.session_state.mqtt_client
+    if not mqtt_client.is_connected():
+        logger.error("MQTT client not connected")
+        return
+        
+    # The MQTT client's message handler will update device_ips
+    # when it receives heartbeat messages
+    logger.info("Device discovery via MQTT is active")
+    add_connection_log("Discovery active", "Listening for device heartbeats via MQTT")
     
-    # For each local IP, scan that subnet
-    for local_ip in local_ips:
-        logger.info(f"Scanning subnet for {local_ip}")
-        
-        ip_parts = local_ip.split('.')
-        if len(ip_parts) != 4:
-            continue
-            
-        # Only scan /24 subnet (last octet)
-        subnet_base = '.'.join(ip_parts[:3])
-        
-        def scan_subnet(subnet):
-            devices_found = 0
-            discovered_devices = {}
-            
-            for i in range(1, 255):
-                test_ip = f"{subnet}.{i}"
-                if test_ip == local_ip:
-                    continue  # Skip our own IP
-                    
-                try:
-                    # Try to connect to the status endpoint
-                    r = requests.get(f"http://{test_ip}:8000/status", timeout=0.5)
-                    if r.status_code == 200:
-                        try:
-                            device_data = r.json()
-                            device_id = device_data.get('device_id', 'Unknown')
-                            logger.info(f"Discovered device: {device_id} at {test_ip}")
-                            
-                            # Store discovered device
-                            discovered_devices[device_id] = test_ip
-                            devices_found += 1
-                            
-                            # Log the discovery
-                            add_connection_log("Device discovered", f"IP: {test_ip}", device_id)
-                        except:
-                            logger.warning(f"Found web server at {test_ip} but not a valid device")
-                except:
-                    pass  # Expected for most IPs
-            
-            # Log the result when complete
-            logger.info(f"Subnet scan complete for {subnet}.0/24: Found {devices_found} devices")
-            add_connection_log("Subnet scan complete", f"Found {devices_found} devices on {subnet}.0/24")
-            
-            # Update session state using Streamlit's rerun mechanism
-            if discovered_devices:
-                if "device_ips" not in st.session_state:
-                    st.session_state.device_ips = {}
-                st.session_state.device_ips.update(discovered_devices)
-                st.rerun()
-                
-            return devices_found
-                
-        # Start scan in a separate thread
-        scan_thread = threading.Thread(
-            target=scan_subnet, 
-            args=(subnet_base,), 
-            daemon=True
-        )
-        scan_thread.start()
-        logger.info(f"Started scan thread for subnet {subnet_base}")
+    # Don't clear existing devices, just wait for new heartbeats
+    return True

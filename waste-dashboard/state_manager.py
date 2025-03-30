@@ -9,36 +9,48 @@ import config
 logger = logging.getLogger('waste-dashboard.state')
 
 def initialize_session_state():
-    """Initialize all session state variables"""
-    # Force reset of critical device tracking variables
-    st.session_state.devices = {}
-    st.session_state.device_ips = {}
-    st.session_state.detection_history = []
-    st.session_state.connection_log = []
-    st.session_state.last_processed_data = datetime.now()
-    st.session_state.show_live_feed = False
-    st.session_state.show_connection_log = False
+    """Initialize session state variables if they don't exist"""
+    # Initialize device tracking variables if they don't exist
+    if "devices" not in st.session_state:
+        st.session_state.devices = {}
+    if "device_ips" not in st.session_state:
+        st.session_state.device_ips = {}
+    if "detection_history" not in st.session_state:
+        st.session_state.detection_history = []
+    if "connection_log" not in st.session_state:
+        st.session_state.connection_log = []
+    if "last_processed_data" not in st.session_state:
+        st.session_state.last_processed_data = datetime.now()
+    if "show_live_feed" not in st.session_state:
+        st.session_state.show_live_feed = False
+    if "show_connection_log" not in st.session_state:
+        st.session_state.show_connection_log = False
     
-    # Initialize receiver status with empty state
-    st.session_state.receiver_status = {
-        "connection_status": "Not started",
-        "connection_attempts": 0,
-        "successful_connections": 0,
-        "failed_connections": 0,
-        "active_devices": set(),
-        "running": False
-    }
+    # Initialize receiver status if it doesn't exist
+    if "receiver_status" not in st.session_state:
+        st.session_state.receiver_status = {
+            "connection_status": "Not started",
+            "connection_attempts": 0,
+            "successful_connections": 0,
+            "failed_connections": 0,
+            "active_devices": set(),
+            "running": False
+        }
     
-    # Add memory management settings
-    st.session_state.max_history_items = 1000  # Maximum items in detection history
-    st.session_state.max_log_entries = 100    # Maximum connection log entries
-    st.session_state.cleanup_interval = 3600  # Cleanup old data every hour
-    st.session_state.last_cleanup = datetime.now()
+    # Initialize memory management settings if they don't exist
+    if "max_history_items" not in st.session_state:
+        st.session_state.max_history_items = 1000  # Maximum items in detection history
+    if "max_log_entries" not in st.session_state:
+        st.session_state.max_log_entries = 100    # Maximum connection log entries
+    if "cleanup_interval" not in st.session_state:
+        st.session_state.cleanup_interval = 3600  # Cleanup old data every hour
+    if "last_cleanup" not in st.session_state:
+        st.session_state.last_cleanup = datetime.now()
     
-    # Force cleanup on initialization
+    # Run cleanup
     cleanup_old_data()
     
-    logger.info("Session state initialized and cleared")
+    logger.info("Session state initialized")
 
 def cleanup_old_data():
     """Clean up old data to prevent memory growth"""
@@ -46,7 +58,7 @@ def cleanup_old_data():
         current_time = datetime.now()
         
         # Run cleanup more frequently for device status
-        if (current_time - st.session_state.last_cleanup).total_seconds() < 30:  # Check every 30 seconds
+        if (current_time - st.session_state.last_cleanup).total_seconds() < 5:  # Check every 5 seconds
             return
             
         # Trim detection history
@@ -61,6 +73,10 @@ def cleanup_old_data():
         timeout = current_time - timedelta(seconds=config.HEARTBEAT_TIMEOUT)
         devices_to_remove = []
         
+        # First clear the active devices set
+        st.session_state.receiver_status["active_devices"] = set()
+        
+        # Check each device's status
         for device_id in st.session_state.devices:
             device = st.session_state.devices[device_id]
             last_updated = device.get('last_updated', datetime.min)
@@ -70,9 +86,13 @@ def cleanup_old_data():
                 except:
                     last_updated = datetime.min
             
+            # If device hasn't sent a heartbeat recently, mark for removal
             if last_updated < timeout:
                 devices_to_remove.append(device_id)
                 logger.info(f"Marking device {device_id} for removal (last seen: {last_updated})")
+            else:
+                # If device is active, add it to the active devices set
+                st.session_state.receiver_status["active_devices"].add(device_id)
         
         # Remove the inactive devices
         for device_id in devices_to_remove:
@@ -80,8 +100,6 @@ def cleanup_old_data():
                 del st.session_state.devices[device_id]
             if device_id in st.session_state.device_ips:
                 del st.session_state.device_ips[device_id]
-            if device_id in st.session_state.receiver_status["active_devices"]:
-                st.session_state.receiver_status["active_devices"].remove(device_id)
             add_connection_log("Device removed", f"Inactive device removed", device_id)
             
         # Update cleanup timestamp
@@ -112,10 +130,28 @@ def process_queues(receiver):
         # Process heartbeats
         try:
             while not receiver.heartbeat_queue.empty():
-                device_id = receiver.heartbeat_queue.get_nowait()
-                update_device_heartbeat(device_id)
+                device_id, heartbeat_data = receiver.heartbeat_queue.get_nowait()
+                if device_id not in st.session_state.devices:
+                    st.session_state.devices[device_id] = {
+                        "id": device_id,
+                        "detections": 0,
+                        "gas_alerts": 0,
+                        "last_updated": datetime.now(),
+                        "waste_categories": {}
+                    }
+                # Update device data
+                device = st.session_state.devices[device_id]
+                device.update(heartbeat_data)
+                device["last_updated"] = datetime.now()
+                # Ensure device is marked as active in receiver status
+                if 'receiver_status' in st.session_state:
+                    if 'active_devices' not in st.session_state.receiver_status:
+                        st.session_state.receiver_status['active_devices'] = set()
+                    st.session_state.receiver_status['active_devices'].add(device_id)
+                logger.info(f"Updated heartbeat for device {device_id}")
         except Exception as e:
             logger.error(f"Error processing heartbeat queue: {e}")
+            logger.exception("Full traceback:")
                 
         # Process detections
         try:
@@ -137,7 +173,8 @@ def process_queues(receiver):
         st.session_state.last_processed_data = datetime.now()
         
     except Exception as e:
-        logger.error(f"Error processing queues: {e}")
+        logger.error(f"Error in process_queues: {e}")
+        logger.exception("Full traceback:")
 
 def update_device_status(device_id, status):
     """Update device status in session state"""

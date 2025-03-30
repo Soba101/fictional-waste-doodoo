@@ -3,14 +3,19 @@ import os
 from datetime import datetime
 
 # Configure logging BEFORE any other imports
-# Set root logger to WARNING
-logging.getLogger().setLevel(logging.WARNING)
+# Set root logger to INFO for more detailed logs
+logging.getLogger().setLevel(logging.INFO)
 
 # Configure basic logging
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Set specific loggers to INFO
+logging.getLogger('waste-dashboard').setLevel(logging.INFO)
+logging.getLogger('data-receiver').setLevel(logging.INFO)
+logging.getLogger('state-manager').setLevel(logging.INFO)
 
 # Set SQLAlchemy logging to WARNING to hide SQL queries
 logging.getLogger('sqlalchemy').setLevel(logging.WARNING)
@@ -105,13 +110,17 @@ def main():
     # Set up logging
     log_file = setup_logging()
     
-    # Initialize session state
-    initialize_session_state()
+    # Initialize session state only if not already initialized
+    if 'devices' not in st.session_state:
+        initialize_session_state()
     
     # Create data receiver if not already created
     if 'receiver' not in st.session_state:
         receiver = DataReceiver()
         st.session_state.receiver = receiver
+        
+        # Initialize MQTT client in session state
+        st.session_state.mqtt_client = receiver.client
         
         # Set up cleanup function
         def cleanup():

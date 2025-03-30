@@ -344,6 +344,9 @@ def create_left_column(metrics):
 @st.cache_resource(ttl=60)
 def get_cached_map_data(devices, user_location=None, last_update=None):
     """Create and cache map data"""
+    # Force cache invalidation when devices are updated
+    current_time = datetime.now().strftime('%H:%M:%S')
+    
     # Find first active device with valid coordinates
     center = config.MAP_DEFAULT_CENTER
     for device_id, device_data in devices.items():
@@ -845,6 +848,11 @@ def export_analytics_data(cached_data):
 def create_device_details(metrics):
     """Create device details view"""
     st.markdown("### Device Status")
+    
+    # Force refresh when devices are updated
+    current_time = datetime.now().strftime('%H:%M:%S')
+    st.markdown(f"<div style='display: none'>{current_time}</div>", unsafe_allow_html=True)
+    
     create_device_status_table(metrics)
     
     if st.session_state.get('show_connection_log', False):

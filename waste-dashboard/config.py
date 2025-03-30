@@ -28,7 +28,7 @@ DATABASE_POOL_TIMEOUT = 30  # Standard timeout
 DATABASE_POOL_RECYCLE = 1800
 
 # Device configuration
-HEARTBEAT_TIMEOUT = 45  # seconds before considering a device disconnected
+HEARTBEAT_TIMEOUT = 30  # seconds before considering a device disconnected
 
 # Dashboard customization
 DASHBOARD_TITLE = "Waste Detection Dashboard"
