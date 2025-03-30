@@ -2,19 +2,6 @@ import streamlit as st
 import config
 import socket
 
-# Set page config as the first Streamlit command
-st.set_page_config(
-    page_title=config.DASHBOARD_TITLE,
-    page_icon=config.DASHBOARD_ICON,
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': None,
-        'Report a bug': None,
-        'About': None
-    }
-)
-
 # Add custom CSS to ensure wide mode
 st.markdown("""
 <style>
@@ -1122,15 +1109,14 @@ def display_category_breakdown(start_date, end_date):
             st.warning("No category data available for the selected date range.")
             return
             
-        # Create pie chart
+        # Create pie chart with discrete colors
         fig = px.pie(
             df,
             values='count',
             names='class_name',
             title="Waste Category Distribution",
             color='avg_confidence',
-            color_continuous_scale='RdYlGn',
-            range_color=[0.5, 1.0]
+            color_discrete_sequence=px.colors.sequential.Viridis
         )
         
         fig.update_layout(

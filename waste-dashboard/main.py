@@ -30,6 +30,19 @@ import time
 import atexit
 import config
 
+# Set page config to wide mode and other options
+st.set_page_config(
+    page_title=config.DASHBOARD_TITLE,
+    page_icon=config.DASHBOARD_ICON,
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
+)
+
 from data_receiver import DataReceiver
 from dashboard_ui import create_dashboard_ui
 from state_manager import initialize_session_state, process_queues
