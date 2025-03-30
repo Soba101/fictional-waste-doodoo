@@ -4,7 +4,6 @@ import socket
 import threading
 import requests
 from datetime import datetime, timedelta
-from data_receiver import log_queue
 
 # Setup logger
 logger = logging.getLogger('waste-dashboard.utils')
@@ -61,8 +60,7 @@ def check_device_status(device_id, ip=None):
 def discover_devices():
     """Actively scan the network for edge devices"""
     logger.info("Starting device discovery scan")
-    # We need to queue this to ensure it's processed in the main thread
-    log_queue.put(("Discovery scan", "Scanning network for devices"))
+    add_connection_log("Discovery scan", "Scanning network for devices")
     
     # Get all local IP addresses to determine network range
     local_ips = []
@@ -90,6 +88,8 @@ def discover_devices():
         
         def scan_subnet(subnet):
             devices_found = 0
+            discovered_devices = {}
+            
             for i in range(1, 255):
                 test_ip = f"{subnet}.{i}"
                 if test_ip == local_ip:
@@ -104,14 +104,12 @@ def discover_devices():
                             device_id = device_data.get('device_id', 'Unknown')
                             logger.info(f"Discovered device: {device_id} at {test_ip}")
                             
-                            # Use a safe way to update session state - queue the info
-                            log_queue.put(("Device discovered", f"IP: {test_ip}", device_id))
-                            
-                            # Store the device IP (to be processed in main thread)
-                            device_ip_data = {"device_id": device_id, "ip": test_ip}
-                            log_queue.put(("DEVICE_IP_UPDATE", device_ip_data))
-                            
+                            # Store discovered device
+                            discovered_devices[device_id] = test_ip
                             devices_found += 1
+                            
+                            # Log the discovery
+                            add_connection_log("Device discovered", f"IP: {test_ip}", device_id)
                         except:
                             logger.warning(f"Found web server at {test_ip} but not a valid device")
                 except:
@@ -119,7 +117,15 @@ def discover_devices():
             
             # Log the result when complete
             logger.info(f"Subnet scan complete for {subnet}.0/24: Found {devices_found} devices")
-            log_queue.put(("Subnet scan complete", f"Found {devices_found} devices on {subnet}.0/24"))
+            add_connection_log("Subnet scan complete", f"Found {devices_found} devices on {subnet}.0/24")
+            
+            # Update session state using Streamlit's rerun mechanism
+            if discovered_devices:
+                if "device_ips" not in st.session_state:
+                    st.session_state.device_ips = {}
+                st.session_state.device_ips.update(discovered_devices)
+                st.rerun()
+                
             return devices_found
                 
         # Start scan in a separate thread

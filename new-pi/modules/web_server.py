@@ -6,13 +6,14 @@ import time
 from datetime import datetime
 from flask import Flask, Response, request, render_template_string
 import json
+import threading
 
 import config
 from utils.helpers import get_network_interfaces
 
 logger = logging.getLogger('web-server-module')
 
-class WebServerModule:
+class WebServer:
     def __init__(self, camera_module, detection_module, communication_module, gps_module=None, gas_module=None):
         """
         Initialize the web server module.
@@ -31,6 +32,8 @@ class WebServerModule:
         self.gas_module = gas_module
         self.app = Flask(__name__)
         self.start_time = time.time()
+        self.server_thread = None
+        self.running = False
         
         # Register routes
         self._register_routes()
@@ -123,7 +126,7 @@ class WebServerModule:
                     <p>Successful Connections: {{ successful_connections }}</p>
                     <p>Failed Connections: {{ failed_connections }}</p>
                     <p>Camera: Raspberry Pi Camera Module</p>
-                    <p>Detection Method: Simple Color Detection</p>
+                    <p>Detection Method: YOLOv8 TFLite Model</p>
                     <p>GPS Status: {{ gps_status }}</p>
                     <p>Gas Sensor Status: 
                         <span class="{{ 'gas-alert' if gas_status == 'DETECTED!' else 'gas-normal' }}">
@@ -232,5 +235,27 @@ class WebServerModule:
     
     def start(self):
         """Start the web server."""
+        if self.running:
+            logger.warning("Web server already running")
+            return
+            
         logger.info(f"Starting web server on port {config.VIDEO_PORT}")
+        self.running = True
+        self.server_thread = threading.Thread(target=self._run_server, daemon=True)
+        self.server_thread.start()
+    
+    def _run_server(self):
+        """Run the Flask server in a separate thread."""
         self.app.run(host='0.0.0.0', port=config.VIDEO_PORT, threaded=True)
+    
+    def stop(self):
+        """Stop the web server."""
+        if not self.running:
+            return
+            
+        self.running = False
+        # Flask doesn't have a built-in way to stop the server
+        # We'll just let the thread terminate naturally
+        if self.server_thread and self.server_thread.is_alive():
+            self.server_thread.join(timeout=1)
+        logger.info("Web server stopped")

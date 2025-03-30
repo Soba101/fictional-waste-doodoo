@@ -21,7 +21,7 @@ The database serves as the persistent storage layer for the waste detection syst
 
 ## Database Schema
 
-The database consists of the following tables:
+The database consists of the following tables and views:
 
 ### `devices`
 Stores information about edge devices sending detection data.
@@ -68,6 +68,111 @@ Stores image data for detections.
 | detection_id | INT | Foreign key reference to detections table |
 | image_data | MEDIUMBLOB | Binary image data (JPEG format) |
 | image_format | VARCHAR(16) | Image format (jpg, png, etc.) |
+
+### Materialized Views
+
+#### `daily_detections`
+Pre-calculated daily detection metrics for faster querying.
+
+```sql
+CREATE TABLE daily_detections (
+    detection_date DATE PRIMARY KEY,
+    detection_events INT,
+    total_detections INT,
+    avg_gas_value FLOAT,
+    max_gas_value FLOAT,
+    active_devices INT,
+    INDEX idx_date (detection_date)
+) ENGINE=InnoDB;
+
+CREATE EVENT update_daily_detections
+ON SCHEDULE EVERY 1 HOUR
+DO
+    INSERT INTO daily_detections
+    SELECT 
+        DATE(timestamp) AS detection_date,
+        COUNT(DISTINCT detection_id) AS detection_events,
+        SUM(num_detections) AS total_detections,
+        AVG(gas_value) AS avg_gas_value,
+        MAX(gas_value) AS max_gas_value,
+        COUNT(DISTINCT device_id) AS active_devices
+    FROM detections
+    WHERE DATE(timestamp) >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+    GROUP BY DATE(timestamp)
+    ON DUPLICATE KEY UPDATE
+        detection_events = VALUES(detection_events),
+        total_detections = VALUES(total_detections),
+        avg_gas_value = VALUES(avg_gas_value),
+        max_gas_value = VALUES(max_gas_value),
+        active_devices = VALUES(active_devices);
+```
+
+#### `device_performance`
+Pre-calculated device performance metrics.
+
+```sql
+CREATE TABLE device_performance (
+    device_id VARCHAR(64) PRIMARY KEY,
+    detection_events INT,
+    total_detections INT,
+    avg_gas_value FLOAT,
+    active_days INT,
+    last_active DATETIME,
+    INDEX idx_last_active (last_active)
+) ENGINE=InnoDB;
+
+CREATE EVENT update_device_performance
+ON SCHEDULE EVERY 1 HOUR
+DO
+    INSERT INTO device_performance
+    SELECT 
+        device_id,
+        COUNT(DISTINCT detection_id) AS detection_events,
+        SUM(num_detections) AS total_detections,
+        AVG(gas_value) AS avg_gas_value,
+        COUNT(DISTINCT DATE(timestamp)) AS active_days,
+        MAX(timestamp) AS last_active
+    FROM detections
+    WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    GROUP BY device_id
+    ON DUPLICATE KEY UPDATE
+        detection_events = VALUES(detection_events),
+        total_detections = VALUES(total_detections),
+        avg_gas_value = VALUES(avg_gas_value),
+        active_days = VALUES(active_days),
+        last_active = VALUES(last_active);
+```
+
+#### `waste_categories`
+Pre-calculated waste category statistics.
+
+```sql
+CREATE TABLE waste_categories (
+    class_name VARCHAR(32) PRIMARY KEY,
+    total_count INT,
+    avg_confidence FLOAT,
+    last_updated DATETIME,
+    INDEX idx_last_updated (last_updated)
+) ENGINE=InnoDB;
+
+CREATE EVENT update_waste_categories
+ON SCHEDULE EVERY 1 HOUR
+DO
+    INSERT INTO waste_categories
+    SELECT 
+        di.class_name,
+        COUNT(*) AS total_count,
+        AVG(di.confidence) AS avg_confidence,
+        NOW() AS last_updated
+    FROM detections d
+    JOIN detected_items di ON d.detection_id = di.detection_id
+    WHERE d.timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    GROUP BY di.class_name
+    ON DUPLICATE KEY UPDATE
+        total_count = VALUES(total_count),
+        avg_confidence = VALUES(avg_confidence),
+        last_updated = VALUES(last_updated);
+```
 
 ## Setup Instructions
 

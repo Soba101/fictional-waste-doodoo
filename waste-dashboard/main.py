@@ -1,8 +1,34 @@
-import streamlit as st
 import logging
 import os
 from datetime import datetime
+
+# Configure logging BEFORE any other imports
+# Set root logger to WARNING
+logging.getLogger().setLevel(logging.WARNING)
+
+# Configure basic logging
+logging.basicConfig(
+    level=logging.WARNING,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Set SQLAlchemy logging to WARNING to hide SQL queries
+logging.getLogger('sqlalchemy').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.dialects').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.orm').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.engine.Engine').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.engine.Connection').setLevel(logging.WARNING)
+
+# Disable echo mode for SQLAlchemy
+os.environ['SQLALCHEMY_ECHO'] = 'false'
+
+# Now import other modules
+import streamlit as st
 import time
+import atexit
+import config
 
 from data_receiver import DataReceiver
 from dashboard_ui import create_dashboard_ui
@@ -11,25 +37,32 @@ from utils import add_connection_log
 
 # Set up logging
 def setup_logging():
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    # Only set up logging if it hasn't been done yet
+    if not hasattr(st.session_state, 'logging_initialized'):
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, f"dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    logger = logging.getLogger('waste-dashboard')
-
-    logger.info("====== Dashboard Starting ======")
-    logger.info(f"Logging to file: {log_file}")
+        # Add file handler
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.WARNING)
+        
+        # Get the root logger
+        logger = logging.getLogger('waste-dashboard')
+        logger.setLevel(logging.WARNING)
+        
+        # Add the file handler to the logger
+        logger.addHandler(file_handler)
+        
+        # Log startup message only once
+        logger.warning("====== Dashboard Starting ======")
+        logger.warning(f"Logging to file: {log_file}")
+        
+        # Mark logging as initialized
+        st.session_state.logging_initialized = True
+        st.session_state.log_file = log_file
     
-    return logger, log_file
+    return st.session_state.log_file
 
 def create_dashboard_ui_with_debug(receiver, log_file):
     """Create the dashboard UI with debug mode option"""
@@ -46,140 +79,82 @@ def create_dashboard_ui_with_debug(receiver, log_file):
         st.markdown("---")
         st.subheader("🔍 Debug Mode Enabled")
         
-        debug_tab1, debug_tab2 = st.tabs(["Database Debug", "Session State"])
+        debug_tab1, debug_tab2 = st.tabs(["MQTT Debug", "Session State"])
         
         with debug_tab1:
-            from dashboard_ui import debug_database_connection
-            debug_database_connection()
+            st.write("MQTT Connection Status:", receiver.is_connected())
+            st.write("MQTT Broker:", f"{config.MQTT_BROKER}:{config.MQTT_PORT}")
             
         with debug_tab2:
-            st.write("Current Session State Variables:")
-            
-            # Show relevant session state variables
-            debug_vars = {
-                'devices': len(st.session_state.get('devices', {})),
-                'device_ips': st.session_state.get('device_ips', {}),
-                'detection_history': f"{len(st.session_state.get('detection_history', []))} entries",
-                'receiver_status': {
-                    k: v for k, v in st.session_state.get('receiver_status', {}).items() 
-                    if k != 'active_devices' and k != 'last_connection_time'
-                },
-                'active_devices': list(st.session_state.get('receiver_status', {}).get('active_devices', [])),
-            }
-            
-            st.json(debug_vars)
+            st.write("Session State:", st.session_state)
 
-# Main function to run the dashboard
 def main():
     # Set up logging
-    logger, log_file = setup_logging()
-    
-    # Page configuration
-    st.set_page_config(
-        page_title="Waste Detection Dashboard",
-        page_icon="♻️",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Add custom CSS styling
-    apply_custom_css()
+    log_file = setup_logging()
     
     # Initialize session state
-    initialize_session_state(logger)
+    initialize_session_state()
     
-    # Create or retrieve data receiver
-    if 'data_receiver' not in st.session_state:
-        logger.info("Creating new DataReceiver instance")
-        st.session_state.data_receiver = DataReceiver()
-        st.session_state.data_receiver.start()
+    # Create data receiver if not already created
+    if 'receiver' not in st.session_state:
+        receiver = DataReceiver()
+        st.session_state.receiver = receiver
+        
+        # Set up cleanup function
+        def cleanup():
+            logger = logging.getLogger('waste-dashboard')
+            logger.info("Cleaning up...")
+            receiver.stop()
+            logger.info("Cleanup complete")
+        
+        # Register cleanup function with atexit
+        atexit.register(cleanup)
+    else:
+        receiver = st.session_state.receiver
     
-    # Access the receiver from session state
-    receiver = st.session_state.data_receiver
+    # Apply custom CSS
+    apply_custom_css()
     
-    # Process all queues - do this in the main thread
-    process_queues()
+    # Enable dark theme
+    enable_dark_theme()
     
-    # Create the dashboard UI with debug option
+    # Process any pending messages
+    process_queues(receiver)
+    
+    # Create dashboard UI
     create_dashboard_ui_with_debug(receiver, log_file)
-    
-    # Register cleanup
-    import atexit
-    def cleanup():
-        if 'data_receiver' in st.session_state:
-            st.session_state.data_receiver.stop()
-            logger.info("Dashboard shutting down, receiver stopped")
-            
-    atexit.register(cleanup)
 
-
-# Custom CSS styling
 def apply_custom_css():
+    """Apply custom CSS to the dashboard."""
     st.markdown("""
-    <style>
-    /* Container padding adjustments */
-    [data-testid="block-container"] {
-        padding-left: 2rem;
-        padding-right: 2rem;
-        padding-top: 1rem;
-        padding-bottom: 0rem;
-        margin-bottom: -7rem;
-    }
-
-    /* Remove extra horizontal padding in columns */
-    [data-testid="stVerticalBlock"] {
-        padding-left: 0rem;
-        padding-right: 0rem;
-    }
-
-    /* Style for st.metric boxes */
-    [data-testid="stMetric"] {
-        background-color: #393939;
-        text-align: center;
-        padding: 15px 0;
-        border-radius: 4px;
-        margin-bottom: 1rem;
-    }
-
-    [data-testid="stMetricLabel"] {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-    }
-
-    /* Adjust the metric delta icon */
-    [data-testid="stMetricDeltaIcon-Up"],
-    [data-testid="stMetricDeltaIcon-Down"] {
-        position: relative;
-        left: 25%;
-        transform: translateX(-50%);
-    }
-
-    /* Status indicators */
-    .status-indicator {
-        display: inline-block;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        margin-right: 5px;
-    }
-    .status-green {
-        background-color: #4CAF50;
-    }
-    .status-yellow {
-        background-color: #FFC107;
-    }
-    .status-red {
-        background-color: #F44336;
-    }
-    </style>
+        <style>
+        .stButton>button {
+            width: 100%;
+            margin-top: 10px;
+        }
+        .stTextInput>div>div>input {
+            background-color: #2b2b2b;
+            color: white;
+        }
+        </style>
     """, unsafe_allow_html=True)
 
-# Enable Altair dark theme
 def enable_dark_theme():
-    import altair as alt
-    alt.themes.enable("dark")
+    """Enable dark theme for the dashboard."""
+    st.markdown("""
+        <style>
+        .stApp {
+            background-color: #1e1e1e;
+            color: white;
+        }
+        .stMarkdown {
+            color: white;
+        }
+        .stText {
+            color: white;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    enable_dark_theme()
     main()

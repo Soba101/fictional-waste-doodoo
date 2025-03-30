@@ -27,6 +27,11 @@ class CameraModule:
         self.frame_lock = threading.Lock()
         self.running = False
         self.thread = None
+        self.process = None
+        self.stderr_thread = None
+        self.retry_count = 0
+        self.max_retries = 3
+        self.retry_delay = 1  # Start with 1 second delay
         
     def get_latest_frame(self):
         """Get the most recent camera frame."""
@@ -54,58 +59,175 @@ class CameraModule:
     def stop(self):
         """Stop the camera capture thread."""
         self.running = False
+        
+        # Stop stderr logging thread
+        if self.stderr_thread:
+            self.stderr_thread.join(timeout=1.0)
+        
+        # Stop camera process
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.error("Failed to kill camera process")
+            except Exception as e:
+                logger.error(f"Error stopping camera process: {e}")
+            finally:
+                self.process = None
+        
+        # Stop capture thread
         if self.thread:
-            self.thread.join(timeout=1.0)
+            self.thread.join(timeout=2.0)
+            if self.thread.is_alive():
+                logger.warning("Camera capture thread did not stop cleanly")
             logger.info("Camera capture thread stopped")
+        
+        # Reset state
+        self.retry_count = 0
+        self.retry_delay = 1
     
     def _capture_thread(self):
         """Thread function for capturing frames from the camera."""
-        logger.info("Starting camera capture with libcamera-still")
+        logger.info("Starting camera capture with libcamera-vid")
         
-        try:
-            # Main capture loop
-            counter = 0
-            while self.running:
+        while self.running:
+            try:
+                # First check if we can access the camera
+                test_cmd = ["libcamera-still", "--list-cameras"]
                 try:
-                    # Capture frame with libcamera-still
-                    capture_path = f"{config.TEMP_DIR}/capture_{counter % 10}.jpg"
-                    counter += 1
-                    
-                    # Use libcamera-still to capture an image
-                    subprocess.run([
-                        "libcamera-still", 
-                        "-n",  # No preview
-                        "--immediate",  # Capture immediately
-                        "-o", capture_path,
-                        "--width", str(config.CAMERA_WIDTH), 
-                        "--height", str(config.CAMERA_HEIGHT),
-                        "-t", "1"  # Minimize timeout
-                    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    
-                    # Load the captured image
-                    frame = cv2.imread(capture_path)
-                    
-                    if frame is not None:
-                        # Update the latest frame
-                        with self.frame_lock:
-                            self.latest_frame = frame
-                            
-                        # Call the callback function if provided
-                        if self.frame_callback:
-                            self.frame_callback(frame)
-                    else:
-                        logger.warning("Failed to read captured frame")
-                    
-                    # Control capture rate
-                    time.sleep(1.0 / config.CAMERA_FPS)
-                    
+                    result = subprocess.run(test_cmd, capture_output=True, text=True)
+                    logger.info(f"Available cameras: {result.stdout}")
                 except Exception as e:
-                    logger.error(f"Error in camera capture: {e}")
-                    time.sleep(1)
+                    logger.error(f"Error checking camera availability: {e}")
+                    self._generate_dummy_frames()
+                    return
+
+                # Start libcamera-vid process with more robust error handling
+                cmd = [
+                    "libcamera-vid",
+                    "-n",                                    # No preview
+                    "--codec", "mjpeg",                      # Use MJPEG codec
+                    "--width", str(config.CAMERA_WIDTH),     # Frame width
+                    "--height", str(config.CAMERA_HEIGHT),   # Frame height
+                    "--framerate", str(config.CAMERA_FPS),   # Use configured framerate
+                    "--timeout", "0",                        # No timeout
+                    "--segment", "1",                        # Output in segments
+                    "--inline",                             # Headers inline
+                    "--output", "-"                         # Output to stdout
+                ]
+                
+                logger.info(f"Starting camera with command: {' '.join(cmd)}")
+                
+                self.process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    bufsize=0  # Unbuffered output
+                )
+                
+                # Start a thread to log stderr
+                self.stderr_thread = threading.Thread(target=self._log_stderr, daemon=True)
+                self.stderr_thread.start()
+                
+                # Reset retry counters on successful start
+                self.retry_count = 0
+                self.retry_delay = 1
+                
+                # Read frames from the process output
+                self._read_frames()
+                
+            except Exception as e:
+                logger.error(f"Fatal camera error: {e}")
+                self.retry_count += 1
+                
+                if self.retry_count >= self.max_retries:
+                    logger.error("Max retries reached, switching to dummy frames")
+                    self._generate_dummy_frames()
+                    return
                     
+                logger.info(f"Retrying camera start in {self.retry_delay} seconds...")
+                time.sleep(self.retry_delay)
+                self.retry_delay = min(self.retry_delay * 2, 30)  # Exponential backoff
+                
+            finally:
+                if self.process:
+                    logger.info("Stopping camera process")
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+                        self.process.wait()
+                    self.process = None
+    
+    def _log_stderr(self):
+        """Log stderr output from the camera process."""
+        try:
+            for line in self.process.stderr:
+                if self.running:  # Only log if still running
+                    logger.error(f"Camera stderr: {line.decode().strip()}")
         except Exception as e:
-            logger.error(f"Fatal camera error: {e}")
-            self._generate_dummy_frames()
+            logger.error(f"Error in stderr logging thread: {e}")
+    
+    def _read_frames(self):
+        """Read and process frames from the camera process."""
+        while self.running:
+            try:
+                # Read until we find JPEG start marker (0xFF 0xD8)
+                while True:
+                    b = self.process.stdout.read(1)
+                    if not b:
+                        logger.error("Camera process stopped outputting frames")
+                        return
+                    if b[0] == 0xFF:
+                        b2 = self.process.stdout.read(1)
+                        if not b2:
+                            return
+                        if b2[0] == 0xD8:
+                            # Found JPEG start, now read until end marker
+                            jpeg_data = b + b2
+                            break
+                
+                # Read until we find JPEG end marker (0xFF 0xD9)
+                while True:
+                    b = self.process.stdout.read(1)
+                    if not b:
+                        return
+                    jpeg_data += b
+                    if b[0] == 0xFF:
+                        b2 = self.process.stdout.read(1)
+                        if not b2:
+                            return
+                        jpeg_data += b2
+                        if b2[0] == 0xD9:
+                            # Found end of JPEG
+                            break
+                
+                # Decode JPEG to frame
+                frame = cv2.imdecode(
+                    np.frombuffer(jpeg_data, dtype=np.uint8),
+                    cv2.IMREAD_COLOR
+                )
+                
+                if frame is not None:
+                    # Update the latest frame
+                    with self.frame_lock:
+                        self.latest_frame = frame
+                        
+                    # Call the callback function if provided
+                    if self.frame_callback:
+                        self.frame_callback(frame)
+                else:
+                    logger.error("Failed to decode frame")
+                    
+            except Exception as e:
+                logger.error(f"Error processing frame: {e}")
+                time.sleep(0.1)  # Avoid tight loop on errors
     
     def _generate_dummy_frames(self):
         """Generate dummy frames when the camera fails."""

@@ -1,10 +1,38 @@
 import streamlit as st
+import config
+import socket
+
+# Set page config as the first Streamlit command
+st.set_page_config(
+    page_title=config.DASHBOARD_TITLE,
+    page_icon=config.DASHBOARD_ICON,
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
+)
+
+# Add custom CSS to ensure wide mode
+st.markdown("""
+<style>
+    .block-container {
+        max-width: 100% !important;
+        padding-top: 1rem;
+        padding-right: 1rem;
+        padding-left: 1rem;
+        padding-bottom: 1rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 import pandas as pd
 import numpy as np
 import folium
 from streamlit_folium import st_folium
 import altair as alt
-import socket
 import time
 import logging
 from datetime import datetime, timedelta
@@ -14,7 +42,7 @@ from PIL import Image
 import pymysql
 from sqlalchemy import create_engine
 import plotly.express as px
-from streamlit_plotly_events import plotly_events  # New import for Plotly events
+from streamlit_plotly_events import plotly_events
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 
@@ -22,34 +50,73 @@ from utils import check_device_status, discover_devices, add_connection_log
 from state_manager import calculate_metrics, process_queues
  
 # Database connection details
-DB_HOST = "192.168.18.113" # need to add a alt for hotspot
-DB_USER = "waste_user"
-DB_PASSWORD = "password"
-DB_NAME = "waste_detection"
- 
-# Create SQLAlchemy engine
-DB_URI = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
-engine = create_engine(DB_URI)
+DB_HOST = config.DATABASE_HOST
+DB_USER = config.DATABASE_USER
+DB_PASSWORD = config.DATABASE_PASSWORD
+DB_NAME = config.DATABASE_NAME
+DB_PORT = config.DATABASE_PORT
+
+def verify_database_connection():
+    """Verify database connection and log status."""
+    try:
+        # Test connection with explicit parameters
+        connection = pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            connect_timeout=5  # Add timeout
+        )
+        connection.ping()  # Test if connection is alive
+        connection.close()
+        logger.info(f"Database connection verified successfully to {DB_HOST}:{DB_PORT}")
+        return True, None
+    except Exception as e:
+        error_msg = f"Database connection failed: {str(e)}"
+        logger.error(f"{error_msg} (Host: {DB_HOST}, Port: {DB_PORT}, User: {DB_USER}, DB: {DB_NAME})")
+        return False, error_msg
+
+# Create SQLAlchemy engine with connection pooling and better logging
+engine = create_engine(
+    f"mariadb+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}",
+    pool_size=config.DATABASE_POOL_SIZE,
+    max_overflow=config.DATABASE_MAX_OVERFLOW,
+    pool_timeout=config.DATABASE_POOL_TIMEOUT,
+    pool_recycle=config.DATABASE_POOL_RECYCLE,
+    echo=False  # Disable SQL query logging
+)
 
 def fetch_detection_data():
-    """Fetch daily detection counts from MariaDB using SQLAlchemy."""
+    """Fetch daily detection counts and metrics from MariaDB using SQLAlchemy."""
     try:
-        # Improved query with better date handling and error checking
+        # Verify connection first
+        if not verify_database_connection():
+            return pd.DataFrame()
+            
+        # Improved query with all necessary metrics
         query = """
         SELECT 
-            DATE(timestamp) AS detection_date, 
-            SUM(num_detections) AS detection_count
+            DATE(timestamp) AS detection_date,
+            COUNT(DISTINCT detection_id) AS detection_events,
+            SUM(num_detections) AS detection_count,
+            AVG(gas_value) AS avg_gas_value,
+            MAX(gas_value) AS max_gas_value,
+            COUNT(DISTINCT device_id) AS active_devices
         FROM detections
         WHERE 
             timestamp IS NOT NULL AND
-            num_detections > 0
-        GROUP BY detection_date
+            timestamp >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+        GROUP BY DATE(timestamp)
         ORDER BY detection_date ASC;
         """
         
         # Execute the query and log the result
         logger.info("Executing detection data query")
         df = pd.read_sql(query, engine)
+        
+        # Fill NaN values with 0
+        df = df.fillna(0)
         
         # Log the shape and preview of the result for debugging
         if not df.empty:
@@ -63,132 +130,161 @@ def fetch_detection_data():
     except Exception as e:
         logger.error(f"Database connection error in fetch_detection_data: {str(e)}")
         st.error(f"Database connection error: {e}")
-        return pd.DataFrame(columns=["detection_date", "detection_count"])
+        return pd.DataFrame()
 
 # Setup logger
 logger = logging.getLogger('waste-dashboard.ui')
 
 def create_dashboard_ui(receiver, log_file):
     """Create the dashboard UI using Streamlit components"""
+    #######################
+    # Check Database Connection
+    db_status, error_msg = verify_database_connection()
+    
+    #######################
+    # Process Data
+    process_queues(receiver)
+    metrics = calculate_metrics()
     
     #######################
     # Sidebar
     create_sidebar(receiver)
     
     #######################
-    # Main Title
-    st.title("Singapore Waste Detection Dashboard")
-    
-    #######################
-    # Retrieve user location from query params
-    user_location = get_user_location()
-    
-    #######################
-    # Layout with columns
-    col = st.columns((1.5, 4.5, 2), gap='medium')
-    
-    # Calculate metrics
-    metrics = calculate_metrics()
-    
-    ## -- LEFT COLUMN: Metrics and device status
-    with col[0]:
-        create_left_column(metrics)
-    
-    ## -- MIDDLE COLUMN: Map or live feed
-    with col[1]:
-        create_middle_column(user_location)
-    
-    ## -- RIGHT COLUMN: Quick stats / summary
-    with col[2]:
-        create_right_column(metrics)
-    
-    #######################
-    # Bottom Section: Historical Chart (Plotly Version)
-    create_bottom_section_plotly()
-    
-    #######################
-    # Footer
-    st.markdown("---")
-    st.markdown(f"**Dashboard Status:** Running since {datetime.now().strftime('%H:%M:%S')}")
-    st.markdown(f"**Log File:** {log_file}")
+    # Main Layout
+    main_container = st.container()
+    with main_container:
+        # Title and Status
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            st.write('<h1 style="margin: 0; white-space: nowrap;">Waste Detection</h1>', unsafe_allow_html=True)
+        with col2:
+            st.empty()
+        
+        # Key Metrics
+        with st.container():
+            stat_cols = st.columns(4)
+            with stat_cols[0]:
+                st.metric(
+                    label="Total Detections", 
+                    value=metrics["total_detections"],
+                    delta=f"{metrics['detection_rate']:.1f}/hour"
+                )
+            with stat_cols[1]:
+                st.metric(
+                    label="Gas Alerts", 
+                    value=metrics["total_gas_alerts"],
+                    delta=metrics["gas_delta"]
+                )
+            with stat_cols[2]:
+                st.metric(
+                    label="Active Devices", 
+                    value=metrics["active_devices"]
+                )
+            with stat_cols[3]:
+                st.metric(
+                    label="Total Items", 
+                    value=sum(metrics["waste_categories"].values())
+                )
+        
+        # Main Content Tabs
+        tab1, tab2, tab3 = st.tabs(["Map View", "Analytics", "Device Details"])
+        
+        with tab1:
+            create_map_view(metrics)
+        
+        with tab2:
+            create_analytics_view(metrics)
+        
+        with tab3:
+            create_device_details(metrics)
+        
+        # Footer
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**Dashboard Status:** Running since {datetime.now().strftime('%H:%M:%S')}")
+        with col2:
+            st.markdown(f"**Log File:** {log_file}")
 
 def create_sidebar(receiver):
-    """Create the sidebar with controls and status info"""
-    st.sidebar.title("Dashboard Controls")
-    st.sidebar.markdown("Use these controls to manage the dashboard.")
-    
-    # Network configuration and discovery
-    st.sidebar.subheader("Network Configuration")
-    
-    # Show the machine's IP addresses that Pi should connect to
-    try:
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
-        st.sidebar.write(f"Dashboard IP: **{local_ip}**")
+    """Create the sidebar with controls and status"""
+    with st.sidebar:
+        st.title("Dashboard Controls")
         
-        # Get all IPs for this machine
-        all_ips = []
-        for iface_addr in socket.getaddrinfo(hostname, None):
-            ip = iface_addr[4][0]
-            if ip not in all_ips and not ip.startswith('127.') and ':' not in ip:  # Skip loopback and IPv6
-                all_ips.append(ip)
-                
-        if len(all_ips) > 1:
-            st.sidebar.write("Alternative IPs:")
-            for ip in all_ips:
-                if ip != local_ip:
-                    st.sidebar.write(f"- **{ip}**")
-                    
-        logger.info(f"Dashboard IPs: {', '.join(all_ips)}")
-    except Exception as e:
-        st.sidebar.error(f"Could not determine local IP: {e}")
-        logger.error(f"Error getting local IP: {e}")
-    
-    # Display receiver status from the actual DataReceiver object
-    receiver_status = st.session_state.receiver_status
-    active_devices_count = len(receiver_status.get("active_devices", set()))
-    connection_status = "🟢 Connected" if active_devices_count > 0 else "🔴 Disconnected"
-    st.sidebar.write(f"Status: {connection_status}")
-    st.sidebar.write(f"Details: {receiver_status['connection_status']}")
-    st.sidebar.write(f"Connection attempts: {receiver_status['connection_attempts']}")
-    st.sidebar.write(f"Successful: {receiver_status['successful_connections']}")
-    st.sidebar.write(f"Failed: {receiver_status['failed_connections']}")
-    st.sidebar.write(f"Active devices: {active_devices_count}")
-    
-    # Control buttons
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("Restart Receiver"):
-            receiver.stop()
-            time.sleep(1)
-            receiver.start()
-            st.sidebar.success("Receiver restarted!")
-            add_connection_log("Receiver restarted")
-    
-    with col2:
-        if st.button("Discover Devices"):
+        # Add discover devices button
+        if st.button("🔍 Discover Devices"):
+            st.info("Scanning network for devices...")
+            from utils import discover_devices
             discover_devices()
-            st.sidebar.success("Discovery started!")
-    
-    # Live feed toggle
-    st.session_state.show_live_feed = st.sidebar.checkbox("Show Live Feed", 
-                                                        value=st.session_state.get('show_live_feed', False))
-    
-    # Device selection for live feed
-    if st.session_state.device_ips and st.session_state.show_live_feed:
-        device_options = list(st.session_state.device_ips.keys())
-        if device_options:
-            selected_device = st.sidebar.selectbox(
-                "Select Device", 
-                device_options,
-                index=0
-            )
-            if selected_device:
-                st.session_state.show_device_feed = selected_device
-    
-    # Connection log display
-    st.session_state.show_connection_log = st.sidebar.checkbox("Show Connection Log", 
-                                                              value=st.session_state.get('show_connection_log', False))
+        
+        # Show connection status
+        st.subheader("Connection Status")
+        
+        # Get own IP address
+        import socket
+        try:
+            hostname = socket.gethostname()
+            dashboard_ip = socket.gethostbyname(hostname)
+            st.text(f"Dashboard IP: {dashboard_ip}")
+            
+            # Get all IPs
+            ip_info = socket.getaddrinfo(hostname, None)
+            alt_ips = set()
+            for item in ip_info:
+                ip = item[4][0]
+                if ip != dashboard_ip and not ip.startswith('127.') and ':' not in ip:
+                    alt_ips.add(ip)
+            if alt_ips:
+                st.text("Alternative IPs:")
+                for ip in alt_ips:
+                    st.text(f"  • {ip}")
+        except:
+            st.text("Could not determine IP")
+        
+        # Show MQTT connection status
+        mqtt_status = receiver.get_status()
+        active_devices = mqtt_status.get("active_devices", set())
+        if mqtt_status["running"] and active_devices:
+            st.markdown("""
+                <div style="background-color: #0f5132; color: white; padding: 10px; border-radius: 5px; margin: 5px 0;">
+                    ✓ Connected to MQTT<br>
+                    Active Devices: {count}
+                </div>
+            """.format(count=len(active_devices)), unsafe_allow_html=True)
+        else:
+            st.markdown("""
+                <div style="background-color: #842029; color: white; padding: 10px; border-radius: 5px; margin: 5px 0;">
+                    ✗ No Active Devices
+                </div>
+            """, unsafe_allow_html=True)
+            
+        # Show database connection status
+        db_connected = verify_database_connection()[0]
+        if db_connected:
+            st.markdown("""
+                <div style="background-color: #0f5132; color: white; padding: 10px; border-radius: 5px; margin: 5px 0;">
+                    ✓ Connected to Database
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+                <div style="background-color: #842029; color: white; padding: 10px; border-radius: 5px; margin: 5px 0;">
+                    ✗ Database Not Connected
+                </div>
+            """, unsafe_allow_html=True)
+            
+        # Show active devices
+        active_devices = st.session_state.receiver_status.get("active_devices", set())
+        if active_devices:
+            st.text(f"Active Devices: {len(active_devices)}")
+            for device_id in active_devices:
+                if device_id in st.session_state.device_ips:
+                    st.text(f"  • {device_id}: {st.session_state.device_ips[device_id]}")
+                else:
+                    st.text(f"  • {device_id}: Unknown IP")
+        else:
+            st.text("No Active Devices")
 
 def get_user_location():
     """Retrieve user location from query params"""
@@ -209,10 +305,18 @@ def create_left_column(metrics):
     """Create the left column with metrics and device status"""
     st.markdown("#### Metrics")
     st.metric(label="Total Detections", value=str(metrics["total_detections"]), 
-              delta=f"{metrics['detection_delta']} from last hour")
+              delta=f"{metrics['detection_rate']:.1f}/hour")
     st.metric(label="Gas Alerts", value=str(metrics["total_gas_alerts"]), 
-              delta=f"{metrics['gas_delta']} from last hour")
-    st.metric(label="Active Edge Devices", value=str(metrics["active_devices"]), delta="")
+              delta=f"{metrics['gas_delta']}")
+    st.metric(label="Active Edge Devices", value=str(metrics["active_devices"]))
+    
+    # Add waste category metrics
+    st.markdown("#### Waste Categories")
+    for category, count in metrics["waste_categories"].items():
+        percentage = metrics["waste_percentages"].get(category, 0)
+        st.metric(label=category.capitalize(), 
+                 value=str(count),
+                 delta=f"{percentage:.1f}%")
     
     st.markdown("#### Device Status")
     
@@ -240,6 +344,7 @@ def create_left_column(metrics):
             "Device": device_id,
             "Status": f"{status_indicator} {is_active and 'Active' or 'Inactive'}",
             "Detections": device_data["detections"],
+            "Gas Alerts": device_data.get("gas_alerts", 0),
             "Last Update": last_update_str
         })
     
@@ -249,410 +354,386 @@ def create_left_column(metrics):
     else:
         st.info("No devices connected yet. Waiting for connections...")
 
-def create_map(devices, user_loc, _last_update=None):
-    """Create a folium map with device markers"""
-    m = folium.Map(location=[1.3521, 103.8198], zoom_start=12, tiles="CartoDB dark_matter")
-    
-    # Add user location if available
-    if user_loc:
-        folium.Marker(
-            location=user_loc,
-            popup="You are here",
-            icon=folium.Icon(color="blue", icon="user")
-        ).add_to(m)
+@st.cache_resource(ttl=60)
+def get_cached_map_data(devices, user_location=None, last_update=None):
+    """Create and cache map data"""
+    # Find first active device with valid coordinates
+    center = config.MAP_DEFAULT_CENTER
+    for device_id, device_data in devices.items():
+        if 'lat' in device_data and 'lon' in device_data:
+            center = [device_data['lat'], device_data['lon']]
+            break
+
+    # Create map centered on device location or default
+    m = folium.Map(
+        location=center,
+        zoom_start=config.MAP_DEFAULT_ZOOM,
+        tiles="cartodbdark_matter"
+    )
     
     # Add markers for each device
     for device_id, device_data in devices.items():
-        # Create tooltip with device info
-        tooltip = f"""
-        <div style="width:200px">
-            <b>{device_data['id']}</b><br>
-            Detections: {device_data['detections']}<br>
-            Gas Alerts: {device_data.get('gas_alerts', 0)}<br>
-        </div>
-        """
-        
-        # Determine icon color based on recency
-        icon_color = "red"
-        now = datetime.now()
+        # Skip devices without location data
+        if 'lat' not in device_data or 'lon' not in device_data:
+            logger.warning(f"Device {device_id} has no location data")
+            continue
+            
+        # Determine device status
         try:
-            last_updated = device_data['last_updated']
+            last_updated = device_data.get('last_updated')
             if isinstance(last_updated, str):
                 last_updated = datetime.fromisoformat(last_updated)
-            time_diff = now - last_updated
-            if time_diff < timedelta(minutes=5):
-                icon_color = "green"  # Active recently
-            elif time_diff < timedelta(minutes=30):
-                icon_color = "orange"  # Active within 30 min
+            time_diff = datetime.now() - last_updated
+            is_active = time_diff < timedelta(minutes=5)
         except:
-            pass
+            is_active = False
+        
+        # Create popup content
+        popup_content = f"""
+        <div style='font-family: Arial, sans-serif;'>
+            <h4>{device_id}</h4>
+            <p>Status: {'🟢 Active' if is_active else '🔴 Inactive'}</p>
+            <p>Location: {device_data['lat']:.6f}, {device_data['lon']:.6f}</p>
+            <p>Detections: {device_data.get('detections', 0)}</p>
+            <p>Gas Alerts: {device_data.get('gas_alerts', 0)}</p>
+            <p>Last Updated: {device_data.get('last_updated', 'Never').strftime('%H:%M:%S') if isinstance(device_data.get('last_updated'), datetime) else 'Never'}</p>
+        </div>
+        """
             
         # Add marker
         folium.Marker(
-            location=[device_data["lat"], device_data["lon"]],
-            popup=tooltip,
-            tooltip=device_data['id'],
-            icon=folium.Icon(color=icon_color, icon="info-sign")
+            location=[device_data['lat'], device_data['lon']],
+            popup=folium.Popup(popup_content, max_width=300),
+            icon=folium.Icon(
+                color='green' if is_active else 'red',
+                icon='video-camera' if is_active else 'warning-sign',
+                prefix='fa'
+            )
         ).add_to(m)
         
     return m
 
-def create_middle_column(user_location):
-    """Create the middle column with map or live feed"""
-    # Cache the map creation with last update time for refreshing
-    @st.cache_resource(ttl=10)  # Cache for 10 seconds max
-    def get_cached_map(devices, user_loc, _last_update=None):
-        return create_map(devices, user_loc, _last_update)
-    
-    # Get the last update time for the map refresh
-    last_update_time = st.session_state.last_processed_data
-    
-    # Create map with the current state
-    cached_map = get_cached_map(st.session_state.devices, user_location, _last_update=last_update_time)
-    
+def create_map_view(metrics):
+    """Create map view"""
     if not st.session_state.get('show_live_feed', False):
-        st.markdown("#### Map of Current Device Locations")
-        map_data = st_folium(cached_map, width=700, height=500)
+        st.markdown("### Device Locations")
+        user_location = get_user_location()
+        last_update_time = st.session_state.last_processed_data
         
-        # Handle map click to select device
+        # Get cached map data
+        cached_map = get_cached_map_data(st.session_state.devices, user_location, last_update_time)
+        
+        # Display map using st_folium (not cached)
+        map_data = st_folium(cached_map, width="100%", height=600)
+        
+        # Handle map click events
         if map_data["last_object_clicked"] is not None:
             clicked_lat = map_data["last_object_clicked"].get("lat")
             clicked_lng = map_data["last_object_clicked"].get("lng")
             
             if clicked_lat and clicked_lng:
                 # Find device near clicked coordinates
-                selected_device = None
                 for device_id, device_data in st.session_state.devices.items():
-                    # Use small threshold for coordinate matching
-                    if (abs(device_data["lat"] - clicked_lat) < 0.01 and 
-                        abs(device_data["lon"] - clicked_lng) < 0.01):
-                        selected_device = device_data
-                        break
-                
-                if selected_device:
-                    st.write(f"**Device:** {selected_device['id']}")
-                    
-                    # Check last activity time
-                    try:
-                        last_updated = selected_device['last_updated']
-                        if isinstance(last_updated, str):
-                            last_updated = datetime.fromisoformat(last_updated)
-                        time_diff = datetime.now() - last_updated
-                        status = "🟢 Active" if time_diff < timedelta(minutes=5) else "🟠 Inactive"
-                        st.write(f"**Status:** {status} (Last seen: {last_updated.strftime('%H:%M:%S')})")
-                    except:
-                        st.write("**Status:** Unknown")
-                    
-                    st.write(f"**Total Detections:** {selected_device['detections']}")
-                    st.write(f"**Gas Alerts:** {selected_device.get('gas_alerts', 0)}")
-                    
-                    # Device IP
-                    device_id = selected_device['id']
-                    device_ip = st.session_state.device_ips.get(device_id, "Unknown")
-                    st.write(f"**IP Address:** {device_ip}")
-                    
-                    # Option to view the device's live feed
-                    if st.button(f"View Live Feed for {selected_device['id']}"):
-                        st.session_state.show_device_feed = selected_device['id']
-                        st.session_state.show_live_feed = True
-                        st.rerun()
+                    if 'lat' in device_data and 'lon' in device_data:
+                        if (abs(device_data["lat"] - clicked_lat) < 0.01 and 
+                            abs(device_data["lon"] - clicked_lng) < 0.01):
+                            display_device_info(device_id, device_data)
+                            break
     else:
-        st.markdown("#### Live Detection Feed")
-        # Display which device we're viewing
-        if "show_device_feed" in st.session_state and st.session_state.show_device_feed in st.session_state.devices:
-            selected_device = st.session_state.show_device_feed
-            device_data = st.session_state.devices[selected_device]
-            st.write(f"Viewing feed from: **{selected_device}**")
-            
-            # Get the device IP
-            device_ip = st.session_state.device_ips.get(selected_device)
-            if device_ip:
-                stream_url = f"http://{device_ip}:8000/video_feed"
-                
-                # First check if the device is reachable
-                connection_status_container = st.empty()
-                connection_status_container.write(f"**Connection:** Connecting to {device_ip}:8000")
-                
-                try:
-                    # Check if the device is reachable by pinging the status endpoint
-                    device_status = check_device_status(selected_device, device_ip)
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            user_location = get_user_location()
+            last_update_time = st.session_state.last_processed_data
+            cached_map = get_cached_map_data(st.session_state.devices, user_location, last_update_time)
+            st_folium(cached_map, width="100%", height=600)
+        with col2:
+            if "show_device_feed" in st.session_state:
+                device_id = st.session_state.show_device_feed
+                if device_id in st.session_state.devices:
+                    device_data = st.session_state.devices[device_id]
+                    st.markdown("### Device Info")
+                    display_device_info(device_id, device_data)
                     
-                    if device_status:
-                        # Device is reachable, update the connection status
-                        connection_status_container.write(f"**Connection:** Successfully connected to {device_ip}:8000")
-                        
-                        # Create a container for the video feed
-                        video_container = st.container()
-                        
-                        # Display the video feed using HTML with a unique ID for the image
-                        video_container.markdown(
-                            f"""
-                            <div style="text-align: center;">
-                                <img id="video-feed" src="{stream_url}" style="width:100%; max-width:800px; border:2px solid #444;" 
-                                    onload="document.getElementById('connection-status').style.display='none';"
-                                    onerror="document.getElementById('connection-status').style.display='block';" />
-                                <div id="connection-status" style="display:none; color:#F55; padding:10px; margin-top:10px; border:1px solid #F55;">
-                                    Video feed unavailable. Check that your device is running and streaming properly.
-                                </div>
-                            </div>
-                            <script>
-                                // Check if the video feed is actually loading
-                                const imgElement = document.getElementById('video-feed');
-                                // Hide the connection error by default
-                                const statusElement = document.getElementById('connection-status');
-                                if (statusElement) statusElement.style.display = 'none';
-                                
-                                // Add event listeners to handle load and error
-                                if (imgElement) {{
-                                    imgElement.onload = function() {{
-                                        if (statusElement) statusElement.style.display = 'none';
-                                    }};
-                                    imgElement.onerror = function() {{
-                                        if (statusElement) statusElement.style.display = 'block';
-                                    }};
-                                }}
-                            </script>
-                            """,
-                            unsafe_allow_html=True
-                        )
-                        
-                        # Display device status information
-                        st.write("**Device Status:**")
-                        
-                        uptime = device_status.get('uptime', 0)
-                        uptime_str = f"{uptime:.1f} seconds" if uptime < 60 else f"{uptime/60:.1f} minutes"
-                        st.write(f"- Uptime: {uptime_str}")
-                        
-                        # Display connection stats
-                        conn_stats = device_status.get('connection', {})
-                        if conn_stats:
-                            st.write("**Connection Statistics:**")
-                            st.write(f"- Successes: {conn_stats.get('success_count', 0)}")
-                            st.write(f"- Failures: {conn_stats.get('failure_count', 0)}")
-                            st.write(f"- Status: {conn_stats.get('last_status', 'Unknown')}")
+                    # Display live video feed
+                    if 'last_frame' in device_data:
+                        try:
+                            # Convert base64 frame to image
+                            import base64
+                            import io
+                            from PIL import Image
+                            
+                            # Decode base64 frame
+                            frame_data = base64.b64decode(device_data['last_frame'])
+                            image = Image.open(io.BytesIO(frame_data))
+                            
+                            # Display the image
+                            st.image(image, caption="Live Feed", use_column_width=True)
+                        except Exception as e:
+                            st.error(f"Error displaying video feed: {e}")
+                            logger.error(f"Error displaying video feed: {e}")
                     else:
-                        # Device isn't reachable but still attempt to show the stream
-                        # (sometimes status endpoint is down but video still works)
-                        connection_status_container.warning(f"**Warning:** Could not reach status endpoint at {device_ip}:8000/status, but attempting to show video feed")
-                        
-                        # Display the video feed with appropriate error handling
-                        st.markdown(
-                            f"""
-                            <div style="text-align: center;">
-                                <img src="{stream_url}" style="width:100%; max-width:800px; border:2px solid #444;"
-                                     onload="this.style.border='2px solid #4CAF50'; document.getElementById('feed-status').innerHTML='Feed active';"
-                                     onerror="this.style.border='2px solid #F44336'; this.src='data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\" viewBox=\"0 0 800 600\"><rect width=\"800\" height=\"600\" fill=\"#222\"/><text x=\"400\" y=\"300\" font-family=\"Arial\" font-size=\"24\" fill=\"white\" text-anchor=\"middle\">Video feed unavailable</text></svg>'; document.getElementById('feed-status').innerHTML='Feed unavailable';" />
-                                <div id="feed-status" style="margin-top:10px; font-style:italic;">Connecting...</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-                except Exception as e:
-                    logger.error(f"Error with video feed display: {e}")
-                    connection_status_container.error(f"Error connecting to {device_ip}:8000: {e}")
-                    
-                    # Still try to display the video feed as a fallback
-                    st.markdown(
-                        f"""
-                        <div style="text-align: center;">
-                            <img src="{stream_url}" style="width:100%; max-width:800px; border:2px solid #444;"
-                                 onload="document.getElementById('error-message').style.display='none';"
-                                 onerror="document.getElementById('error-message').style.display='block';" />
-                            <div id="error-message" style="color:#F55; padding:10px; margin-top:10px; border:1px solid #F55;">
-                                Connection error: Video feed unavailable
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-            else:
-                st.error(f"Cannot determine IP address for {selected_device}")
-                logger.error(f"No IP address for {selected_device}")
-                
-            # Button to go back to map
-            if st.button("Back to Map"):
-                st.session_state.show_live_feed = False
-                if "show_device_feed" in st.session_state:
-                    del st.session_state.show_device_feed
-                st.rerun()
-        else:
-            st.error("No device selected or device not available")
-            if st.button("Back to Map"):
-                st.session_state.show_live_feed = False
-                st.rerun()
+                        st.info("Waiting for video feed...")
 
-def create_right_column(metrics):
-    """Create the right column with quick stats and system status"""
-    # Connection log (if enabled)
-    if st.session_state.get('show_connection_log', False):
-        st.markdown("#### Connection Log")
-        if st.session_state.connection_log:
-            for entry in reversed(st.session_state.connection_log[-10:]):
-                timestamp = entry["timestamp"].strftime("%H:%M:%S")
-                device = entry.get("device_id", "")
-                event = entry["event"]
-                details = entry.get("details", "")
-                
-                if device:
-                    st.write(f"**{timestamp}** [{device}] {event}")
-                else:
-                    st.write(f"**{timestamp}** {event}")
-                    
-                if details:
-                    st.write(f"<span style='margin-left:20px; color: #999;'>{details}</span>", unsafe_allow_html=True)
-        else:
-            st.info("No connection events recorded yet")
-    else:
-        st.markdown("#### Detection Summary")
+def display_device_info(device_id, device_data):
+    """Display detailed information about a device"""
+    st.markdown(f"#### Device: {device_id}")
+    
+    # Status
+    is_active = device_id in st.session_state.receiver_status.get("active_devices", set())
+    status_indicator = "🟢" if is_active else "🔴"
+    st.markdown(f"**Status:** {status_indicator} {'Active' if is_active else 'Inactive'}")
+    
+    # Metrics
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Total Detections", device_data.get("detections", 0))
+    with col2:
+        st.metric("Gas Alerts", device_data.get("gas_alerts", 0))
+    
+    # Last Update
+    if 'last_updated' in device_data:
+        try:
+            last_updated = device_data['last_updated']
+            if isinstance(last_updated, str):
+                last_updated = datetime.fromisoformat(last_updated)
+            st.markdown(f"**Last Update:** {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
+        except:
+            st.markdown("**Last Update:** Unknown")
+    
+    # Location
+    if 'lat' in device_data and 'lon' in device_data:
+        st.markdown(f"**Location:** {device_data['lat']:.6f}, {device_data['lon']:.6f}")
+    
+    # IP Address
+    if device_id in st.session_state.device_ips:
+        st.markdown(f"**IP Address:** {st.session_state.device_ips[device_id]}")
+
+def fill_missing_dates(df):
+    """Fill missing dates in the detection data with zeros"""
+    if df.empty:
+        return df
         
-        # Show latest detections
-        if st.session_state.detection_history:
-            st.write("**Recent Detections:**")
-            recent_detections = sorted(
-                st.session_state.detection_history[-10:],
-                key=lambda x: x["time"], 
-                reverse=True
+    # Ensure we have a datetime index
+    df['detection_date'] = pd.to_datetime(df['detection_date'])
+    df.set_index('detection_date', inplace=True)
+    
+    # Create a complete date range
+    date_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='D')
+    
+    # Reindex the dataframe with the complete date range
+    df = df.reindex(date_range, fill_value=0)
+    
+    # Reset the index to make detection_date a column again
+    df.reset_index(inplace=True)
+    df.rename(columns={'index': 'detection_date'}, inplace=True)
+    
+    return df
+
+@st.cache_data(ttl=60)
+def get_cached_analytics_data(metrics):
+    """Cache analytics data calculations"""
+    return {
+        'waste_data': pd.DataFrame({
+            'Category': list(metrics["waste_categories"].keys()),
+            'Count': list(metrics["waste_categories"].values()),
+            'Percentage': [metrics["waste_percentages"].get(cat, 0) for cat in metrics["waste_categories"].keys()]
+        }).sort_values('Count', ascending=False)
+    }
+
+def create_analytics_view(metrics):
+    """Create analytics view with improved layout and interactivity"""
+    # Main container with tabs for different views
+    tab1, tab2 = st.tabs(["Overview", "Detailed Analysis"])
+    
+    with tab1:
+        # Top row with key metrics
+        metric_cols = st.columns(4)
+        with metric_cols[0]:
+            st.metric(
+                label="Daily Detections",
+                value=metrics.get("daily_detections", 0),
+                delta=f"{metrics.get('daily_detection_rate', 0):.1f}/hour"
             )
-            
-            for i, detection in enumerate(recent_detections[:5]):
-                detection_time = detection["time"].strftime("%H:%M:%S")
-                st.write(f"- {detection_time}: {detection['count']} items on {detection['device']}")
-    
-    st.markdown("#### System Status")
-    total_devices = len(st.session_state.devices)
-    
-    # Calculate average detections per active device
-    active_devices = metrics["active_devices"]
-    total_detections = metrics["total_detections"]
-    if active_devices > 0:
-        avg_detections = total_detections / active_devices
-    else:
-        avg_detections = 0
+        with metric_cols[1]:
+            st.metric(
+                label="Waste Categories",
+                value=len(metrics.get("waste_categories", {})),
+                delta="Active"
+            )
+        with metric_cols[2]:
+            st.metric(
+                label="Avg. Gas Level",
+                value=f"{metrics.get('avg_gas_level', 0):.1f}",
+                delta=f"{metrics.get('gas_level_delta', 0):.1f}"
+            )
+        with metric_cols[3]:
+            st.metric(
+                label="Detection Rate",
+                value=f"{metrics.get('detection_rate', 0):.1f}/hour",
+                delta=f"{metrics.get('rate_delta', 0):.1f}"
+            )
         
-    st.write(f"**Total Devices:** {total_devices}")
-    st.write(f"**Active Devices:** {active_devices}")
-    st.write(f"**Avg. Detections/Device:** {avg_detections:.1f}")
+        # Main content area with improved layout
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            create_bottom_section_plotly()
+        with col2:
+            st.markdown("### Waste Categories")
+            cached_data = get_cached_analytics_data(metrics)
+            display_waste_categories_with_data(cached_data['waste_data'])
+            
+            # Add export button
+            if st.button("📥 Export Data"):
+                export_analytics_data(cached_data)
+    
+    with tab2:
+        st.markdown("### Detailed Analysis")
+        # Add date range selector
+        date_col1, date_col2 = st.columns(2)
+        with date_col1:
+            start_date = st.date_input(
+                "Start Date",
+                datetime.now().date() - timedelta(days=30),
+                max_value=datetime.now().date()
+            )
+        with date_col2:
+            end_date = st.date_input(
+                "End Date",
+                datetime.now().date(),
+                max_value=datetime.now().date()
+            )
+        
+        # Add analysis options
+        analysis_type = st.selectbox(
+            "Analysis Type",
+            ["Trend Analysis", "Category Breakdown", "Device Performance", "Environmental Impact"]
+        )
+        
+        if analysis_type == "Trend Analysis":
+            display_trend_analysis(start_date, end_date)
+        elif analysis_type == "Category Breakdown":
+            display_category_breakdown(start_date, end_date)
+        elif analysis_type == "Device Performance":
+            display_device_performance(start_date, end_date)
+        else:
+            display_environmental_impact(start_date, end_date)
 
-    # Connection details section
-    st.markdown("#### Connection Details")
-    if st.session_state.device_ips:
-        for device_id, ip in st.session_state.device_ips.items():
-            # Check if this device is active
-            is_active = device_id in st.session_state.receiver_status.get("active_devices", set())
-            status_indicator = "🟢" if is_active else "🔴"
-            
-            st.write(f"{status_indicator} **{device_id}:** {ip}")
-            
-            # Try to check device status
-            status = check_device_status(device_id, ip)
-            if status:
-                uptime = status.get('uptime', 0)
-                uptime_str = f"{uptime:.1f}s" if uptime < 60 else f"{uptime/60:.1f}m"
-                st.write(f"<span style='margin-left:20px;'>Uptime: {uptime_str}</span>", unsafe_allow_html=True)
-    else:
-        st.info("No device connections detected yet")
+def display_waste_categories_with_data(waste_data):
+    """Display waste categories with improved visualization"""
+    if waste_data.empty:
+        st.warning("No waste category data available.")
+        return
         
-    # About section
-    with st.expander("About", expanded=True):
-        st.write("""
-        - This dashboard connects to edge devices running waste detection.
-        - The system receives data from devices via TCP socket connection.
-        - Toggle 'Show Live Feed' in sidebar to view live detection feed.
-        - Click on a device marker on the map for more details.
-        - Check the connection log for detailed network activity.
-        """)
+    fig = px.bar(
+        waste_data,
+        x='Count',
+        y='Category',
+        orientation='h',
+        text='Percentage',
+        labels={'Count': 'Number of Items', 'Category': 'Waste Type'},
+        title="Waste Distribution",
+        color='Count',  # Use count for color intensity
+        color_continuous_scale='Viridis'  # Changed from RdYlGn
+    )
+    
+    # Enhanced styling
+    fig.update_layout(
+        height=300,
+        margin=dict(l=0, r=0, t=30, b=0),
+        plot_bgcolor="#1e1e1e",
+        paper_bgcolor="#1e1e1e",
+        font=dict(color="#ffffff"),
+        hovermode='y unified',
+        showlegend=False,
+        coloraxis_showscale=False
+    )
+    
+    fig.update_traces(
+        texttemplate='%{text:.1f}%',
+        textposition='outside',
+        marker_line_color='#ffffff',
+        marker_line_width=1
+    )
+    
+    # Add hover template
+    fig.update_traces(
+        hovertemplate="<b>%{y}</b><br>" +
+                     "Count: %{x}<br>" +
+                     "Percentage: %{text}<br>" +
+                     "<extra></extra>"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 def create_bottom_section_plotly():
-    """
-    Create the bottom section with a basic Plotly chart.
-    """
-    st.markdown("---")
+    """Create the bottom section with enhanced detection history chart"""
     st.markdown("### Detection History")
     
-    # Date range controls
-    col1, col2 = st.columns([3, 2])
-    
-    with col1:
-        # Dropdown for preset date ranges
-        date_ranges = get_date_range_options()
-        selected_range = st.selectbox(
-            "Date Range",
-            options=range(len(date_ranges)),
-            format_func=lambda i: date_ranges[i]["label"],
-            index=3  # Changed from 2 to 3 to default to "Year to date"
-        )
-        days_to_display = date_ranges[selected_range]["days"]
-    
-    with col2:
-        # Refresh button that clears the cache to force data reload
-        refresh = st.button("Refresh Data")
+    # Controls in an expander for better space management
+    with st.expander("Chart Controls", expanded=False):
+        col1, col2, col3 = st.columns([2, 1, 1])
         
-        # Chart type options
-        chart_type = st.radio(
-            "Chart Type",
-            options=["Line", "Bar"],
-            horizontal=True
-        )
+        with col1:
+            date_ranges = [
+                {"label": "Last 7 days", "days": 7},
+                {"label": "Last 30 days", "days": 30},
+                {"label": "Last 90 days", "days": 90},
+                {"label": "Year to date", "days": (datetime.now().date() - datetime(datetime.now().year, 1, 1).date()).days},
+                {"label": "All time", "days": 9999}
+            ]
+            selected_range = st.selectbox(
+                "Date Range",
+                options=range(len(date_ranges)),
+                format_func=lambda i: date_ranges[i]["label"],
+                index=1  # Default to 30 days
+            )
         
-    # Force refresh on button click by clearing cache
+        with col2:
+            chart_type = st.radio(
+                "Chart Type",
+                options=["Line", "Bar", "Area"],
+                horizontal=True,
+                index=0  # Default to Line
+            )
+        
+        with col3:
+            refresh = st.button("🔄 Refresh")
+    
+    # Force refresh on button click
     if refresh:
         st.cache_data.clear()
         st.rerun()
     
-    # Calculate date range
-    end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=days_to_display)
+    # Get cached detection data
+    df = get_cached_detection_data()
     
-    # Simple direct database query
-    try:
-        logger.info(f"Querying detection data from {start_date} to {end_date}")
-        
-        # Basic query for detection counts
-        date_query = """
-        SELECT 
-            DATE(timestamp) AS detection_date, 
-            COUNT(DISTINCT detection_id) AS detection_events,
-            SUM(CASE WHEN num_detections IS NULL THEN 0 ELSE num_detections END) AS detection_count
-        FROM detections
-        WHERE timestamp IS NOT NULL
-        AND timestamp BETWEEN %s AND CONCAT(%s, ' 23:59:59')
-        GROUP BY detection_date
-        ORDER BY detection_date ASC
-        """
-        
-        # Execute query with parameters
-        df = pd.read_sql(
-            date_query, 
-            engine, 
-            params=(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')),
-            parse_dates=['detection_date']
-        )
-        
-        logger.info(f"Query returned {len(df)} rows")
-    except Exception as e:
-        logger.error(f"Error in detection query: {e}")
-        st.error(f"Error fetching detection data: {e}")
-        df = pd.DataFrame(columns=["detection_date", "detection_events", "detection_count"])
-    
-    # If the dataframe is empty, show a message
     if df.empty:
-        st.warning("No detection data available for the selected date range.")
+        st.warning("No detection data available.")
         return
     
-    # Create a metric selector for the chart
+    # Filter data based on selected date range
+    days = date_ranges[selected_range]["days"]
+    cutoff_date = datetime.now().date() - timedelta(days=days)
+    df['detection_date'] = pd.to_datetime(df['detection_date']).dt.date
+    df = df[df['detection_date'] >= cutoff_date]
+    
+    # Enhanced metric selector
     metric = st.radio(
         "Chart Metric", 
-        options=["Total Items Detected", "Detection Events"],
+        options=["Total Items", "Detection Events", "Gas Level"],
         horizontal=True,
         index=0
     )
     
     # Set the y-axis based on metric selection
-    y_column = "detection_count" if metric == "Total Items Detected" else "detection_events"
+    y_column = {
+        "Total Items": "detection_count",
+        "Detection Events": "detection_events",
+        "Gas Level": "avg_gas_value"
+    }[metric]
     
-    # VERY BASIC CHART - just use Plotly Express directly with minimal settings
     try:
-        # Create the basic chart with proper markers for visibility
+        # Create the chart with enhanced styling
         if chart_type == "Line":
             fig = px.line(
                 df,
@@ -660,441 +741,547 @@ def create_bottom_section_plotly():
                 y=y_column,
                 title=f"Daily {metric}"
             )
-            # Add markers explicitly to make points more visible
-            fig.update_traces(mode='lines+markers', marker=dict(size=8))
-        else:  # Bar chart
+            fig.update_traces(
+                mode='lines+markers',
+                marker=dict(size=8, color='#00ff00'),
+                line=dict(width=2, color='#00ff00')
+            )
+        elif chart_type == "Bar":
             fig = px.bar(
                 df,
                 x="detection_date",
                 y=y_column,
-                title=f"Daily {metric}"
+                title=f"Daily {metric}",
+                color_discrete_sequence=['#00ff00']
+            )
+        else:  # Area chart
+            fig = px.area(
+                df,
+                x="detection_date",
+                y=y_column,
+                title=f"Daily {metric}",
+                color_discrete_sequence=['#00ff00']
             )
         
-        # Improve appearance with grid lines
+        # Enhanced layout
         fig.update_layout(
             xaxis=dict(
                 showgrid=True,
                 gridcolor='rgba(255,255,255,0.1)',
-                tickformat='%b %d'
+                tickformat='%b %d',
+                title="Date"
             ),
             yaxis=dict(
                 showgrid=True,
                 gridcolor='rgba(255,255,255,0.1)',
-                title=y_column
+                title=metric
             ),
             plot_bgcolor='#1e1e1e',
             paper_bgcolor='#1e1e1e',
             font=dict(color='white'),
-            height=450  # Fixed height to ensure consistency
+            height=450,
+            hovermode='x unified'
         )
         
-        # Use ONLY plain st.plotly_chart - no interactivity for stability
+        # Add trend line for line charts
+        if chart_type == "Line":
+            # Calculate trend line
+            x_numeric = np.arange(len(df))
+            z = np.polyfit(x_numeric, df[y_column], 1)
+            p = np.poly1d(z)
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=df['detection_date'],
+                    y=p(x_numeric),
+                    name='Trend',
+                    line=dict(color='red', dash='dash', width=2)
+                )
+            )
+        
         st.plotly_chart(fig, use_container_width=True)
         
-        # Show summary
-        st.markdown(f"**Total {metric}:** {int(df[y_column].sum())}")
+        # Summary statistics with improved formatting
+        st.markdown("### Summary Statistics")
+        col1, col2, col3 = st.columns(3)
         
-        # Select date manually via dropdown instead of clicking
-        date_options = df['detection_date'].dt.strftime('%Y-%m-%d').tolist()
-        if date_options:
-            selected_date = st.selectbox("Select a date to view details:", 
-                                       options=date_options,
-                                       format_func=lambda x: pd.to_datetime(x).strftime('%B %d, %Y'))
+        with col1:
+            total = int(df[y_column].sum())
+            st.metric(
+                "Total",
+                f"{total:,}",
+                delta=f"{total/len(df):.1f}/day" if len(df) > 0 else None
+            )
+        with col2:
+            avg = df[y_column].mean()
+            st.metric(
+                "Average",
+                f"{avg:.1f}",
+                delta=f"{(df[y_column].std()/avg*100):.1f}% σ" if avg > 0 else None
+            )
+        with col3:
+            peak = int(df[y_column].max())
+            st.metric(
+                "Peak",
+                f"{peak:,}",
+                delta=f"{(peak/avg if avg > 0 else 0):.1f}x avg" if avg > 0 else None
+            )
             
-            if selected_date:
-                # Display detailed data for the selected date
-                display_detailed_detection_data(selected_date)
-                
     except Exception as e:
         st.error(f"Error creating chart: {e}")
         logger.error(f"Chart error: {e}")
 
-def display_detailed_detection_data(selected_date):
-    """Fetch and display detection details for a selected date"""
-    st.markdown("---")
-    st.markdown(f"### Historical Waste Detection Data for {selected_date}")
-
+def export_analytics_data(cached_data):
+    """Export analytics data to CSV"""
     try:
-        # First get summary information for this date
-        summary_query = """
+        # Create DataFrame from cached data
+        df = pd.DataFrame(cached_data['waste_data'])
+        
+        # Generate timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"waste_analytics_{timestamp}.csv"
+        
+        # Convert to CSV
+        csv = df.to_csv(index=False)
+        
+        # Create download button
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name=filename,
+            mime="text/csv"
+        )
+    except Exception as e:
+        st.error(f"Error exporting data: {e}")
+        logger.error(f"Export error: {e}")
+
+def create_device_details(metrics):
+    """Create device details view"""
+    st.markdown("### Device Status")
+    create_device_status_table(metrics)
+    
+    if st.session_state.get('show_connection_log', False):
+        st.markdown("### Connection Log")
+        display_connection_log()
+
+@st.cache_data(ttl=300)
+def get_cached_detection_data():
+    """Cache detection data fetch and processing"""
+    df = fetch_detection_data()
+    if not df.empty:
+        return fill_missing_dates(df)
+    return pd.DataFrame(columns=["detection_date", "detection_count"])
+
+def create_device_status_table(metrics):
+    """Create an enhanced device status table"""
+    if not st.session_state.devices:
+        st.info("No devices connected yet. Waiting for connections...")
+        return
+        
+    # Create DataFrame for devices
+    device_data = []
+    for device_id, device_info in st.session_state.devices.items():
+        is_active = device_id in st.session_state.receiver_status.get("active_devices", set())
+        
+        try:
+            last_updated = device_info['last_updated']
+            if isinstance(last_updated, str):
+                last_updated = datetime.fromisoformat(last_updated)
+            time_diff = datetime.now() - last_updated
+            status = "🟢 Active" if time_diff < timedelta(minutes=5) else "🟠 Inactive"
+            last_seen = last_updated.strftime("%H:%M:%S")
+        except:
+            status = "🔴 Unknown"
+            last_seen = "Unknown"
+            
+        device_data.append({
+            "Device ID": device_id,
+            "Status": status,
+            "Detections": device_info["detections"],
+            "Gas Alerts": device_info.get("gas_alerts", 0),
+            "Last Seen": last_seen,
+            "IP Address": st.session_state.device_ips.get(device_id, "Unknown"),
+            "Live Feed": device_id,  # We'll use this to create buttons
+            "Connection Log": device_id  # We'll use this to create buttons
+        })
+    
+    # Convert to DataFrame
+    df_devices = pd.DataFrame(device_data)
+    
+    # Create columns for the table and buttons
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        # Create headers first
+        header_cols = st.columns([2, 2, 1, 1, 1.5, 2, 1.5, 1.5])
+        with header_cols[0]:
+            st.markdown("**Device ID**")
+        with header_cols[1]:
+            st.markdown("**Status**")
+        with header_cols[2]:
+            st.markdown("**Detections**")
+        with header_cols[3]:
+            st.markdown("**Gas Alerts**")
+        with header_cols[4]:
+            st.markdown("**Last Seen**")
+        with header_cols[5]:
+            st.markdown("**IP Address**")
+        with header_cols[6]:
+            st.markdown("**Live Feed**")
+        with header_cols[7]:
+            st.markdown("**Log**")
+        
+        # Add a separator line
+        st.markdown("---")
+        
+        # Display the table rows
+        for index, row in df_devices.iterrows():
+            cols = st.columns([2, 2, 1, 1, 1.5, 2, 1.5, 1.5])
+            with cols[0]:
+                st.write(row["Device ID"])
+            with cols[1]:
+                st.write(row["Status"])
+            with cols[2]:
+                st.write(str(row["Detections"]))
+            with cols[3]:
+                st.write(str(row["Gas Alerts"]))
+            with cols[4]:
+                st.write(row["Last Seen"])
+            with cols[5]:
+                st.write(row["IP Address"])
+            with cols[6]:
+                if st.button("📺 Live", key=f"live_{row['Device ID']}"):
+                    st.session_state.show_device_feed = row["Device ID"]
+                    st.session_state.show_live_feed = True
+            with cols[7]:
+                if st.button("📝", key=f"log_{row['Device ID']}"):
+                    st.session_state.show_connection_log = True
+                    st.session_state.selected_device_log = row["Device ID"]
+    
+    # Show live feed or connection log in the second column if selected
+    with col2:
+        if st.session_state.get("show_live_feed", False) and "show_device_feed" in st.session_state:
+            device_id = st.session_state.show_device_feed
+            if device_id in st.session_state.devices:
+                device_data = st.session_state.devices[device_id]
+                st.markdown("### Live Feed")
+                
+                # Get device IP address
+                device_ip = st.session_state.device_ips.get(device_id, None)
+                if device_ip and device_ip != "Unknown":
+                    # Create iframe to show live feed from device's web server
+                    video_url = f"http://{device_ip}:8000/video_feed"
+                    st.markdown(f"""
+                        <div style="width:100%; height:400px; background-color:#1e1e1e; border-radius:10px; overflow:hidden;">
+                            <iframe src="{video_url}" 
+                                    width="100%" 
+                                    height="100%" 
+                                    frameborder="0" 
+                                    style="background-color:#1e1e1e;">
+                            </iframe>
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.error("Device IP address unknown. Cannot display video feed.")
+                
+                # Add a close button
+                if st.button("❌ Close Feed"):
+                    st.session_state.show_live_feed = False
+                    st.session_state.show_device_feed = None
+        
+        elif st.session_state.get("show_connection_log", False) and "selected_device_log" in st.session_state:
+            device_id = st.session_state.selected_device_log
+            st.markdown(f"### Connection Log - {device_id}")
+            
+            # Filter connection log for selected device
+            device_logs = [log for log in st.session_state.connection_log 
+                         if "device_id" in log and log["device_id"] == device_id]
+            
+            # Display logs
+            for log in device_logs[-10:]:  # Show last 10 logs
+                st.text(f"{log['timestamp'].strftime('%H:%M:%S')}: {log['event']}")
+                if 'details' in log:
+                    st.text(f"  {log['details']}")
+            
+            # Add a close button
+            if st.button("❌ Close Log"):
+                st.session_state.show_connection_log = False
+                st.session_state.selected_device_log = None
+
+def display_connection_log():
+    """Display the connection log with formatting"""
+    if not st.session_state.connection_log:
+        st.info("No connection events recorded yet")
+        return
+        
+    for entry in reversed(st.session_state.connection_log[-10:]):
+        timestamp = entry["timestamp"].strftime("%H:%M:%S")
+        device = entry.get("device_id", "")
+        event = entry["event"]
+        details = entry.get("details", "")
+        
+        # Create a formatted log entry
+        if device:
+            st.markdown(f"**{timestamp}** [{device}] {event}")
+        else:
+            st.markdown(f"**{timestamp}** {event}")
+            
+        if details:
+            st.markdown(f"<span style='margin-left:20px; color: #999;'>{details}</span>", 
+                      unsafe_allow_html=True)
+
+def display_trend_analysis(start_date, end_date):
+    """Display trend analysis for the selected date range"""
+    try:
+        # Fetch data for the selected date range
+        query = """
         SELECT 
-            COUNT(DISTINCT device_id) AS devices_count,
-            SUM(num_detections) AS total_detections,
+            DATE(timestamp) AS date,
             COUNT(DISTINCT detection_id) AS detection_events,
+            SUM(num_detections) AS total_detections,
             AVG(gas_value) AS avg_gas_value
         FROM detections
-        WHERE DATE(timestamp) = %s
+        WHERE DATE(timestamp) BETWEEN %s AND %s
+        GROUP BY DATE(timestamp)
+        ORDER BY date ASC
         """
-        df_summary = pd.read_sql(summary_query, engine, params=(selected_date,))
         
-        if not df_summary.empty and df_summary['total_detections'].iloc[0] > 0:
-            # Display summary information
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Detection Events", df_summary['detection_events'].iloc[0])
-            with col2:
-                st.metric("Total Items Detected", df_summary['total_detections'].iloc[0])
-            with col3:
-                st.metric("Active Devices", df_summary['devices_count'].iloc[0])
-            with col4:
-                st.metric("Avg Gas Value", f"{df_summary['avg_gas_value'].iloc[0]:.2f}")
+        df = pd.read_sql(query, engine, params=(start_date, end_date))
+        
+        if df.empty:
+            st.warning("No data available for the selected date range.")
+            return
             
-            # Get waste type distribution for this date
-            waste_query = """
-            SELECT 
-                di.class_name, 
-                COUNT(*) AS count,
-                AVG(di.confidence) AS avg_confidence
-            FROM detections d
-            JOIN detected_items di ON d.detection_id = di.detection_id
-            WHERE DATE(d.timestamp) = %s
-            GROUP BY di.class_name
-            ORDER BY count DESC
-            """
-            df_waste = pd.read_sql(waste_query, engine, params=(selected_date,))
-            
-            if not df_waste.empty:
-                st.subheader("Waste Type Distribution")
-                
-                # Create two columns layout
-                col1, col2 = st.columns([3, 2])
-                
-                with col1:
-                    # Create a bar chart for waste types
-                    fig = px.bar(
-                        df_waste,
-                        x='count', 
-                        y='class_name',
-                        orientation='h',
-                        labels={'count': 'Number of Items', 'class_name': 'Waste Type'},
-                        color='avg_confidence',
-                        color_continuous_scale='RdYlGn',
-                        range_color=[0.5, 1.0],
-                        title="Waste Types Detected"
-                    )
-                    
-                    fig.update_layout(
-                        plot_bgcolor="#1e1e1e",
-                        paper_bgcolor="#1e1e1e",
-                        font=dict(color="#ffffff"),
-                        height=400
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    # Display the data table
-                    df_waste['avg_confidence'] = df_waste['avg_confidence'].round(2)
-                    st.dataframe(df_waste, use_container_width=True)
-            
-            # Use parameterized query for detailed data (with LIMIT to prevent overloading)
-            query = """
-            SELECT 
-                d.detection_id, 
-                d.device_id, 
-                d.timestamp, 
-                d.num_detections, 
-                d.gas_value,
-                di.class_name, 
-                di.confidence, 
-                di.x_coord, 
-                di.y_coord, 
-                di.width, 
-                di.height,
-                k.keyframe_id
-            FROM detections d
-            LEFT JOIN detected_items di ON d.detection_id = di.detection_id
-            LEFT JOIN keyframes k ON d.detection_id = k.detection_id
-            WHERE DATE(d.timestamp) = %s
-            ORDER BY d.timestamp ASC, d.detection_id ASC
-            LIMIT 100;
-            """
-            
-            df_details = pd.read_sql(query, engine, params=(selected_date,))
-            
-            if not df_details.empty:
-                st.subheader("Detection Details")
-                
-                # Format the timestamp for better readability
-                if 'timestamp' in df_details.columns:
-                    df_details['timestamp'] = pd.to_datetime(df_details['timestamp']).dt.strftime('%H:%M:%S')
-                
-                # Round confidence values
-                if 'confidence' in df_details.columns:
-                    df_details['confidence'] = df_details['confidence'].round(2)
-                
-                # Show the details table
-                st.dataframe(df_details, use_container_width=True)
-                
-                # If we have keyframes, show a gallery of sample images
-                if 'keyframe_id' in df_details.columns and df_details['keyframe_id'].notna().any():
-                    st.subheader("Keyframes")
-                    st.info("Click on an image to view full size")
-                    
-                    # Limit to at most 5 keyframes to display
-                    keyframe_ids = df_details['keyframe_id'].dropna().unique()[:5]
-                    
-                    # Create a grid of images
-                    cols = st.columns(min(len(keyframe_ids), 5))
-                    
-                    for i, keyframe_id in enumerate(keyframe_ids):
-                        with cols[i % len(cols)]:
-                            try:
-                                # Query to retrieve the actual image data from the database
-                                keyframe_query = """
-                                SELECT image_data, image_format FROM keyframes 
-                                WHERE keyframe_id = %s
-                                """
-                                
-                                # Execute the query using pd.read_sql which handles parameters differently
-                                df_keyframe = pd.read_sql(keyframe_query, engine, params=(int(keyframe_id),))
-                                
-                                if not df_keyframe.empty and df_keyframe['image_data'].iloc[0] is not None:
-                                    # Get the binary image data and format
-                                    image_data = df_keyframe['image_data'].iloc[0]
-                                    image_format = df_keyframe['image_format'].iloc[0] or 'jpg'
-                                    
-                                    # Convert binary data to image
-                                    from PIL import Image
-                                    import io
-                                    
-                                    # Create an in-memory file-like object
-                                    image_bytes = io.BytesIO(image_data)
-                                    
-                                    # Open the image with PIL
-                                    img = Image.open(image_bytes)
-                                    
-                                    # Display the image in Streamlit
-                                    st.image(img, caption=f"Keyframe {int(keyframe_id)}", use_container_width=True)
-                                else:
-                                    st.warning(f"No image data found for keyframe {int(keyframe_id)}")
-                            except Exception as e:
-                                st.warning(f"Error loading keyframe {int(keyframe_id)}: {e}")
-                                logger.error(f"Keyframe load error: {e}")
-            else:
-                st.info("No detailed data available for this date.")
-        else:
-            st.warning("No detection data found for the selected date.")
+        # Create a figure with secondary y-axis
+        fig = go.Figure()
+        
+        # Add traces
+        fig.add_trace(go.Scatter(
+            x=df['date'],
+            y=df['total_detections'],
+            name="Total Detections",
+            line=dict(color='#00ff00', width=2)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=df['date'],
+            y=df['avg_gas_value'],
+            name="Average Gas Level",
+            yaxis='y2',
+            line=dict(color='#ff0000', width=2)
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title="Detection and Gas Level Trends",
+            xaxis=dict(title="Date"),
+            yaxis=dict(title="Total Detections", side='left'),
+            yaxis2=dict(title="Average Gas Level", side='right', overlaying='y'),
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font=dict(color='white'),
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show summary statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Detections", f"{int(df['total_detections'].sum()):,}")
+        with col2:
+            st.metric("Avg. Gas Level", f"{df['avg_gas_value'].mean():.1f}")
+        with col3:
+            st.metric("Detection Events", f"{int(df['detection_events'].sum()):,}")
             
     except Exception as e:
-        st.error(f"Error fetching detailed detection data: {e}")
-        logger.error(f"Error in display_detailed_detection_data: {str(e)}")
+        st.error(f"Error in trend analysis: {e}")
+        logger.error(f"Trend analysis error: {e}")
 
-def get_date_range_options():
-    """Get preset date range options for the chart"""
-    today = datetime.now().date()
-    
-    return [
-        {"label": "Last 7 days", "days": 7},
-        {"label": "Last 30 days", "days": 30},
-        {"label": "Last 90 days", "days": 90},
-        {"label": "Year to date", "days": (today - datetime(today.year, 1, 1).date()).days},
-        {"label": "All time", "days": 9999}  # A large number to ensure all data is included
-    ]
+def display_category_breakdown(start_date, end_date):
+    """Display waste category breakdown for the selected date range"""
+    try:
+        # Fetch category data
+        query = """
+        SELECT 
+            di.class_name,
+            COUNT(*) AS count,
+            AVG(di.confidence) AS avg_confidence
+        FROM detections d
+        JOIN detected_items di ON d.detection_id = di.detection_id
+        WHERE DATE(d.timestamp) BETWEEN %s AND %s
+        GROUP BY di.class_name
+        ORDER BY count DESC
+        """
+        
+        df = pd.read_sql(query, engine, params=(start_date, end_date))
+        
+        if df.empty:
+            st.warning("No category data available for the selected date range.")
+            return
+            
+        # Create pie chart
+        fig = px.pie(
+            df,
+            values='count',
+            names='class_name',
+            title="Waste Category Distribution",
+            color='avg_confidence',
+            color_continuous_scale='RdYlGn',
+            range_color=[0.5, 1.0]
+        )
+        
+        fig.update_layout(
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font=dict(color='white'),
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show detailed breakdown
+        st.markdown("### Detailed Breakdown")
+        df['avg_confidence'] = df['avg_confidence'].round(2)
+        st.dataframe(df, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error in category breakdown: {e}")
+        logger.error(f"Category breakdown error: {e}")
 
-def filter_date_range(df, days=30):
-    """Filter dataframe to only include dates within the specified number of days"""
-    if df.empty or days >= 9999:
-        return df
+def display_device_performance(start_date, end_date):
+    """Display device performance metrics for the selected date range"""
+    try:
+        # Fetch device performance data
+        query = """
+        SELECT 
+            d.device_id,
+            COUNT(DISTINCT d.detection_id) AS detection_events,
+            SUM(d.num_detections) AS total_detections,
+            AVG(d.gas_value) AS avg_gas_value,
+            COUNT(DISTINCT DATE(d.timestamp)) AS active_days
+        FROM detections d
+        WHERE DATE(d.timestamp) BETWEEN %s AND %s
+        GROUP BY d.device_id
+        ORDER BY total_detections DESC
+        """
         
-    end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=days)
-    
-    # Convert detection_date to datetime if it's not already
-    if not pd.api.types.is_datetime64_any_dtype(df["detection_date"]):
-        df["detection_date"] = pd.to_datetime(df["detection_date"])
-    
-    # Filter to the date range
-    mask = (df["detection_date"].dt.date >= start_date) & (df["detection_date"].dt.date <= end_date)
-    return df[mask].copy()
+        df = pd.read_sql(query, engine, params=(start_date, end_date))
+        
+        if df.empty:
+            st.warning("No device performance data available for the selected date range.")
+            return
+            
+        # Create performance metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Devices", len(df))
+        with col2:
+            st.metric("Total Detections", f"{int(df['total_detections'].sum()):,}")
+        with col3:
+            st.metric("Avg. Active Days", f"{df['active_days'].mean():.1f}")
+        
+        # Create device performance chart
+        fig = px.bar(
+            df,
+            x='device_id',
+            y=['total_detections', 'detection_events'],
+            title="Device Performance Comparison",
+            barmode='group'
+        )
+        
+        fig.update_layout(
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font=dict(color='white'),
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show detailed device metrics
+        st.markdown("### Device Metrics")
+        st.dataframe(df, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error in device performance analysis: {e}")
+        logger.error(f"Device performance error: {e}")
 
-def fill_missing_dates(df, days=30):
-    """Fill in missing dates in the dataframe with zero counts"""
-    if df.empty:
-        return df
+def display_environmental_impact(start_date, end_date):
+    """Display environmental impact analysis for the selected date range"""
+    try:
+        # Fetch environmental impact data
+        query = """
+        SELECT 
+            DATE(d.timestamp) AS date,
+            COUNT(DISTINCT d.detection_id) AS detection_events,
+            SUM(d.num_detections) AS total_detections,
+            AVG(d.gas_value) AS avg_gas_value,
+            COUNT(DISTINCT d.device_id) AS active_devices
+        FROM detections d
+        WHERE DATE(d.timestamp) BETWEEN %s AND %s
+        GROUP BY DATE(d.timestamp)
+        ORDER BY date ASC
+        """
         
-    # Ensure detection_date is datetime
-    if not pd.api.types.is_datetime64_any_dtype(df["detection_date"]):
-        df["detection_date"] = pd.to_datetime(df["detection_date"])
-    
-    # Get the date range
-    if days >= 9999:
-        # Use the min/max from the data
-        start_date = df["detection_date"].min().date()
-        end_date = df["detection_date"].max().date()
-    else:
-        # Use the specified number of days
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=days)
-    
-    # Create a continuous date range
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-    
-    # Create a dataframe with all dates
-    all_dates = pd.DataFrame({"detection_date": date_range})
-    
-    # Convert df dates to date only (no time component) for proper merging
-    df_dates = df.copy()
-    df_dates["detection_date"] = df_dates["detection_date"].dt.date
-    df_dates["detection_date"] = pd.to_datetime(df_dates["detection_date"])
-    
-    # Merge with the original data
-    merged = pd.merge(all_dates, df_dates, on="detection_date", how="left")
-    
-    # Fill missing values with zeros
-    merged["detection_count"] = merged["detection_count"].fillna(0)
-    
-    return merged.sort_values("detection_date")
-
-def debug_database_connection():
-    """Function to debug database connection and data"""
-    st.markdown("---")
-    st.markdown("### Database Connection Debugger")
-    
-    # Button to test the daily detection counts query specifically
-    if st.button("🔍 Test Detection Counts Query"):
-        st.subheader("Detection Counts Query Test")
+        df = pd.read_sql(query, engine, params=(start_date, end_date))
         
-        try:
-            # Test the exact query used in the chart
-            query = """
-            SELECT DATE(timestamp) AS detection_date, 
-                   SUM(num_detections) AS detection_count
-            FROM detections
-            GROUP BY detection_date
-            ORDER BY detection_date ASC;
-            """
+        if df.empty:
+            st.warning("No environmental impact data available for the selected date range.")
+            return
             
-            df = pd.read_sql(query, engine)
-            
-            if not df.empty:
-                st.success(f"✅ Query successful! Found {len(df)} dates with detection data.")
-                
-                # Convert dates for display
-                if not pd.api.types.is_datetime64_any_dtype(df["detection_date"]):
-                    df["detection_date"] = pd.to_datetime(df["detection_date"])
-                
-                # Show summary statistics
-                st.write(f"Date range: {df['detection_date'].min().date()} to {df['detection_date'].max().date()}")
-                st.write(f"Total detections: {int(df['detection_count'].sum())}")
-                
-                # Check for date gaps
-                all_dates = pd.date_range(start=df['detection_date'].min(), end=df['detection_date'].max())
-                missing_dates = [d for d in all_dates if d not in df['detection_date'].values]
-                
-                if missing_dates:
-                    st.warning(f"⚠️ Found {len(missing_dates)} gaps in the date sequence.")
-                    if len(missing_dates) < 10:
-                        st.write("Missing dates:", [d.date() for d in missing_dates])
-                    else:
-                        st.write("First few missing dates:", [d.date() for d in missing_dates[:5]])
-                else:
-                    st.success("✅ No gaps in the date sequence.")
-                
-                # Display the data
-                st.dataframe(df, use_container_width=True)
-                
-                # Create a simple chart to visualize the data
-                fig = px.line(
-                    df, 
-                    x='detection_date', 
-                    y='detection_count',
-                    title="Detection Counts from Direct Query",
-                    markers=True
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-            else:
-                st.warning("⚠️ Query returned no data.")
-                
-        except Exception as e:
-            st.error(f"❌ Query failed: {e}")
-    
-    with st.expander("Database Connection Details", expanded=False):
-        st.code(f"Database URI: {DB_URI.replace(DB_PASSWORD, '********')}")
+        # Calculate environmental metrics
+        total_detections = df['total_detections'].sum()
+        avg_gas_level = df['avg_gas_value'].mean()
+        max_gas_level = df['avg_gas_value'].max()
         
-        # Test the connection
-        try:
-            # Check if we can connect
-            test_query = "SELECT 1"
-            result = pd.read_sql(test_query, engine)
-            st.success("✅ Database connection successful")
-            
-            # Check the tables
-            tables_query = "SHOW TABLES"
-            tables = pd.read_sql(tables_query, engine)
-            st.write("Available tables:")
-            st.dataframe(tables)
-            
-            # Get table row counts
-            st.write("Table row counts:")
-            counts = {}
-            for table in tables.iloc[:, 0]:
-                count_query = f"SELECT COUNT(*) as count FROM {table}"
-                count = pd.read_sql(count_query, engine).iloc[0]['count']
-                counts[table] = count
-            
-            counts_df = pd.DataFrame(list(counts.items()), columns=['Table', 'Row Count'])
-            st.dataframe(counts_df)
-            
-        except Exception as e:
-            st.error(f"❌ Database connection error: {e}")
-            
-    with st.expander("Detection Data Sample", expanded=False):
-        try:
-            # Get a sample of detection data
-            sample_query = """
-            SELECT * FROM detections 
-            ORDER BY timestamp DESC 
-            LIMIT 10
-            """
-            sample = pd.read_sql(sample_query, engine)
-            
-            if not sample.empty:
-                st.write("Recent detections sample:")
-                st.dataframe(sample)
-                
-                # Get date range
-                range_query = """
-                SELECT 
-                    MIN(DATE(timestamp)) as min_date,
-                    MAX(DATE(timestamp)) as max_date,
-                    COUNT(DISTINCT DATE(timestamp)) as date_count
-                FROM detections
-                """
-                date_range = pd.read_sql(range_query, engine)
-                
-                st.write("Date range in detections table:")
-                st.dataframe(date_range)
-                
-                # Check for null timestamps
-                null_query = "SELECT COUNT(*) as null_count FROM detections WHERE timestamp IS NULL"
-                null_count = pd.read_sql(null_query, engine).iloc[0]['null_count']
-                
-                if null_count > 0:
-                    st.warning(f"⚠️ Found {null_count} records with NULL timestamps")
-                else:
-                    st.success("✅ No NULL timestamps found")
-                
-            else:
-                st.warning("No detection data found")
-                
-        except Exception as e:
-            st.error(f"Error querying detection data: {e}")
-            
-    with st.expander("Run Custom SQL Query", expanded=False):
-        custom_query = st.text_area("Enter a custom SQL query:", 
-                                  "SELECT DATE(timestamp) as date, COUNT(*) as count FROM detections GROUP BY date ORDER BY date")
+        # Display key metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Items Detected", f"{int(total_detections):,}")
+        with col2:
+            st.metric("Average Gas Level", f"{avg_gas_level:.1f}")
+        with col3:
+            st.metric("Peak Gas Level", f"{max_gas_level:.1f}")
         
-        if st.button("Run Query"):
-            try:
-                if custom_query.strip():
-                    result = pd.read_sql(custom_query, engine)
-                    st.write("Query results:")
-                    st.dataframe(result)
-                else:
-                    st.warning("Please enter a query")
-            except Exception as e:
-                st.error(f"Error executing query: {e}")
-                
+        # Create environmental impact chart
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=df['date'],
+            y=df['total_detections'],
+            name="Daily Detections",
+            line=dict(color='#00ff00', width=2)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=df['date'],
+            y=df['avg_gas_value'],
+            name="Gas Level",
+            yaxis='y2',
+            line=dict(color='#ff0000', width=2)
+        ))
+        
+        fig.update_layout(
+            title="Environmental Impact Trends",
+            xaxis=dict(title="Date"),
+            yaxis=dict(title="Daily Detections", side='left'),
+            yaxis2=dict(title="Gas Level", side='right', overlaying='y'),
+            plot_bgcolor='#1e1e1e',
+            paper_bgcolor='#1e1e1e',
+            font=dict(color='white'),
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show daily breakdown
+        st.markdown("### Daily Environmental Impact")
+        st.dataframe(df, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error in environmental impact analysis: {e}")
+        logger.error(f"Environmental impact error: {e}")
 

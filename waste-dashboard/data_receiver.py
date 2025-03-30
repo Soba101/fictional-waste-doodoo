@@ -1,246 +1,168 @@
-import socket
-import threading
+"""
+Data receiver module for the dashboard using MQTT.
+"""
 import json
 import logging
-import queue
-from datetime import datetime, timedelta
+import threading
+import time
+from datetime import datetime
+import paho.mqtt.client as mqtt
+from queue import Queue
+import streamlit as st
 
-# Setup logger
-logger = logging.getLogger('waste-dashboard.data-receiver')
+import config
 
-# Global queues for thread-safe communication
-data_queue = queue.Queue()
-log_queue = queue.Queue()
+logger = logging.getLogger('data-receiver')
 
 class DataReceiver:
-    def __init__(self, host='0.0.0.0', port=5001):
-        """
-        Initialize data receiver with configurable host/port
-        Using 0.0.0.0 to bind to all network interfaces
-        """
-        self.host = host
-        self.port = port
-        self.running = False
-        self.socket = None
-        self.thread = None
+    def __init__(self):
+        """Initialize the data receiver with MQTT client"""
+        self.client = mqtt.Client(client_id="dashboard_receiver")
+        self.client.on_connect = self._on_connect
+        self.client.on_message = self._on_message
         
-        # Instead of accessing session state directly, we'll use local
-        # variables and queues
-        self.connected_devices = set()
-        self.last_connection_time = {}
-        self.connection_status = "Not started"
-        self.connection_attempts = 0
-        self.successful_connections = 0
-        self.failed_connections = 0
+        # Initialize queues for different types of data
+        self.status_queue = Queue()
+        self.heartbeat_queue = Queue()
+        self.detection_queue = Queue()
+        self.frame_queue = Queue()
         
-    def initialize_socket(self):
-        """Initialize and configure socket"""
-        try:
-            if self.socket:
-                try:
-                    self.socket.close()
-                except:
-                    pass
-                    
-            logger.info(f"Initializing socket on {self.host}:{self.port}")
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            
-            try:
-                self.socket.bind((self.host, self.port))
-                self.socket.listen(5)  # Allow up to 5 queued connections
-                self.socket.settimeout(1.0)  # 1 second timeout for accept()
-                self.connection_status = f"Listening on {self.host}:{self.port}"
-                logger.info(f"Server socket bound successfully to {self.host}:{self.port}")
-                # Use queue instead of directly accessing session state
-                log_queue.put(("Socket bound", f"Listening on {self.host}:{self.port}"))
-                return True
-            except Exception as bind_error:
-                logger.error(f"Socket bind error: {bind_error}")
-                log_queue.put(("Socket bind error", str(bind_error)))
-                if self.socket:
-                    self.socket.close()
-                    self.socket = None
-                return False
-                
-        except Exception as e:
-            self.connection_status = f"Socket error: {str(e)}"
-            logger.error(f"Failed to initialize socket: {e}")
-            log_queue.put(("Socket initialization error", str(e)))
-            if self.socket:
-                self.socket.close()
-                self.socket = None
-            return False
+        # Internal state tracking
+        self._connection_status = "Not started"
+        self._connection_attempts = 0
+        self._successful_connections = 0
+        self._failed_connections = 0
+        self._active_devices = set()
+        self._is_connected = False
+        self._is_running = False
+        
+        # Initialize session state if not exists
+        if 'receiver_status' not in st.session_state:
+            st.session_state.receiver_status = {
+                'connection_status': 'Disconnected',
+                'connection_attempts': 0,
+                'successful_connections': 0,
+                'failed_connections': 0,
+                'active_devices': set(),
+                'last_connection_time': None
+            }
+        
+        # Start MQTT client
+        self.start()
     
     def start(self):
-        """Start the receiver thread if not already running"""
-        if self.running:
-            logger.info("Receiver already running, not starting again")
-            return
+        """Start the MQTT client"""
+        if self._is_running:
+            logger.warning("Data receiver already running")
+            return True
             
-        self.running = True
-        if not self.initialize_socket():
-            logger.error("Failed to initialize socket, cannot start receiver")
-            self.running = False
+        try:
+            logger.info("Starting data receiver")
+            self._is_running = True
+            self._connection_attempts += 1
+            self.client.connect(config.MQTT_BROKER, config.MQTT_PORT, keepalive=config.MQTT_KEEPALIVE)
+            self.client.loop_start()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start data receiver: {e}")
+            self._connection_status = f"Failed to connect: {e}"
+            self._failed_connections += 1
+            self._is_running = False
             return False
-            
-        def receive_loop():
-            logger.info("Receiver loop starting")
-            log_queue.put(("Receiver started", "Waiting for connections"))
-            
-            while self.running:
-                try:
-                    # Accept connection with timeout
-                    client_socket, address = self.socket.accept()
-                    client_ip = address[0]
-                    logger.info(f"Connection from {client_ip}:{address[1]}")
-                    self.connection_attempts += 1
-                    
-                    # Set timeout for receiving data
-                    client_socket.settimeout(2.0)
-                    
-                    # Receive data
-                    data = b""
-                    try:
-                        chunk = client_socket.recv(4096)
-                        while chunk:
-                            data += chunk
-                            try:
-                                # Try to receive more data, but don't block for too long
-                                client_socket.settimeout(0.1)
-                                chunk = client_socket.recv(4096)
-                            except socket.timeout:
-                                # No more data available right now
-                                break
-                    except socket.timeout:
-                        logger.warning(f"Timeout receiving data from {client_ip}")
-                        log_queue.put(("Receive timeout", f"From {client_ip}"))
-                        self.failed_connections += 1
-                        client_socket.close()
-                        continue
-                    
-                    # Process received data
-                    if data:
-                        try:
-                            json_data = json.loads(data.decode('utf-8'))
-                            device_id = json_data.get('device_id', 'Unknown Device')
-                            
-                            # *** IMPORTANT FIX: Associate the sender IP with the data ***
-                            # Add a special attribute to track where this data came from
-                            json_data['_sender_ip'] = client_ip
-                            
-                            # Mark this device as active in our local tracking
-                            self.connected_devices.add(device_id)
-                            self.last_connection_time[device_id] = datetime.now()
-                            
-                            # Queue device IP update instead of directly updating session state
-                            device_ip_data = {"device_id": device_id, "ip": client_ip}
-                            log_queue.put(("DEVICE_IP_UPDATE", device_ip_data))
-                            
-                            # Log prediction info
-                            predictions = json_data.get('predictions', [])
-                            if predictions:
-                                logger.info(f"Received {len(predictions)} predictions from {device_id}")
-                                classes = [p.get('class', 'unknown') for p in predictions]
-                                logger.info(f"Detected classes: {', '.join(classes)}")
-                            
-                            # Add to queue for main thread processing
-                            data_queue.put(json_data)
-                            self.connection_status = f"Last data: {datetime.now().strftime('%H:%M:%S')} from {device_id}"
-                            self.successful_connections += 1
-                            
-                            # Add a log entry for the new connection
-                            log_queue.put(("New data received", f"From {client_ip}", device_id))
-                            
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Invalid JSON received from {client_ip}: {e}")
-                            logger.error(f"Raw data: {data[:100]}...")  # Log first 100 bytes
-                            log_queue.put(("JSON parse error", f"From {client_ip}: {e}"))
-                            self.connection_status = f"JSON error from {client_ip}: {str(e)}"
-                            self.failed_connections += 1
-                            
-                            # *** IMPORTANT: Still mark receiver as running even on JSON errors ***
-                            log_queue.put(("STATUS_UPDATE", {
-                                "running": True,
-                                "connection_status": self.connection_status,
-                                "connection_attempts": self.connection_attempts,
-                                "successful_connections": self.successful_connections, 
-                                "failed_connections": self.failed_connections,
-                                "active_devices": self.connected_devices.copy(),
-                                "last_connection_time": self.last_connection_time.copy()
-                            }))
-                    else:
-                        logger.warning(f"Empty data received from {client_ip}")
-                        log_queue.put(("Empty data", f"From {client_ip}"))
-                        self.failed_connections += 1
-                    
-                    # Close the client socket
-                    client_socket.close()
-                    
-                except socket.timeout:
-                    # This is expected with the accept timeout, just continue
-                    pass
-                except Exception as e:
-                    if self.running:  # Only log if we're still supposed to be running
-                        logger.error(f"Connection error: {e}")
-                        log_queue.put(("Connection error", str(e)))
-                        self.connection_status = f"Connection error: {str(e)}"
-                        self.failed_connections += 1
-                        
-                        # Try to reinitialize if there was a serious error
-                        if "Bad file descriptor" in str(e):
-                            logger.info("Attempting to reinitialize socket after error")
-                            self.initialize_socket()
-                
-                # Update status periodically
-                if self.running:
-                    self.update_status()
-            
-            logger.info("Receiver loop ending")
-        
-        # Start the receiver thread
-        self.thread = threading.Thread(target=receive_loop, daemon=True)
-        self.thread.start()
-        logger.info(f"Started receiver thread: {self.thread.name}")
-        return True
-    
-    def update_status(self):
-        """Update session state with current status via queue"""
-        # This method updates our status data to be picked up by the main thread
-        status_update = {
-            "running": self.running,
-            "connection_status": self.connection_status,
-            "connection_attempts": self.connection_attempts,
-            "successful_connections": self.successful_connections,
-            "failed_connections": self.failed_connections,
-            "active_devices": self.connected_devices.copy(),
-            "last_connection_time": self.last_connection_time.copy()
-        }
-        # Use a special queue message type for status updates
-        log_queue.put(("STATUS_UPDATE", status_update))
     
     def stop(self):
-        """Stop the receiver"""
-        logger.info("Stopping receiver")
-        self.running = False
-        if self.socket:
-            try:
-                self.socket.close()
-            except:
-                pass
-            self.socket = None
-        self.connection_status = "Stopped"
-        log_queue.put(("Receiver stopped", None))
-        
-    def is_running(self):
-        """Check if receiver is running"""
-        return self.running and self.thread is not None and self.thread.is_alive()
+        """Stop the MQTT client"""
+        if not self._is_running:
+            return True
+            
+        try:
+            self._is_running = False
+            self.client.loop_stop()
+            self.client.disconnect()
+            logger.info("Data receiver stopped")
+            self._connection_status = "Stopped"
+            self._is_connected = False
+            return True
+        except Exception as e:
+            logger.error(f"Error stopping data receiver: {e}")
+            return False
     
-    def get_active_devices(self):
-        """Return list of devices that have connected recently (last 5 minutes)"""
-        active_devices = []
-        now = datetime.now()
-        for device_id, last_time in self.last_connection_time.items():
-            if now - last_time < timedelta(minutes=5):
-                active_devices.append(device_id)
-        return active_devices
+    def _on_connect(self, client, userdata, flags, rc):
+        """Callback when connected to MQTT broker"""
+        if rc == 0:
+            if not self._is_connected:
+                logger.info("Connected to MQTT broker")
+                self._connection_status = "Connected"
+                self._successful_connections += 1
+                self._is_connected = True
+                
+                # Subscribe to all device topics
+                client.subscribe(f"{config.MQTT_TOPIC_PREFIX}/+/status")
+                client.subscribe(f"{config.MQTT_TOPIC_PREFIX}/+/heartbeat")
+                client.subscribe(f"{config.MQTT_TOPIC_PREFIX}/+/detections")
+                client.subscribe(f"{config.MQTT_TOPIC_PREFIX}/+/frames")
+        else:
+            logger.error(f"Failed to connect to MQTT broker with code: {rc}")
+            self._connection_status = f"Connection failed: {rc}"
+            self._failed_connections += 1
+            self._is_connected = False
+    
+    def _on_message(self, client, userdata, msg):
+        """Handle incoming MQTT messages"""
+        try:
+            # Parse topic to get device ID and message type
+            topic_parts = msg.topic.split('/')
+            if len(topic_parts) != 3:
+                logger.warning(f"Invalid topic format: {msg.topic}")
+                return
+                
+            device_id = topic_parts[1]
+            msg_type = topic_parts[2]
+            
+            # Parse message payload
+            try:
+                payload = json.loads(msg.payload.decode())
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON in message from {device_id}")
+                return
+            
+            # Add timestamp to payload
+            payload['timestamp'] = datetime.now()
+            
+            # Extract IP address from payload if available
+            if 'sender_ip' in payload:
+                if 'device_ips' not in st.session_state:
+                    st.session_state.device_ips = {}
+                if payload['sender_ip'] != st.session_state.device_ips.get(device_id):
+                    st.session_state.device_ips[device_id] = payload['sender_ip']
+                    logger.info(f"Updated IP for {device_id} to {payload['sender_ip']} from {msg_type}")
+            
+            # Route message to appropriate queue
+            if msg_type == 'status':
+                self.status_queue.put((device_id, payload))
+            elif msg_type == 'heartbeat':
+                self._active_devices.add(device_id)
+                self.heartbeat_queue.put(device_id)
+            elif msg_type == 'detections':
+                self.detection_queue.put((device_id, payload))
+            elif msg_type == 'frames':
+                self.frame_queue.put((device_id, payload))
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+    
+    def get_status(self):
+        """Get current receiver status"""
+        return {
+            "connection_status": self._connection_status,
+            "connection_attempts": self._connection_attempts,
+            "successful_connections": self._successful_connections,
+            "failed_connections": self._failed_connections,
+            "active_devices": self._active_devices,
+            "running": self._is_running and self._is_connected
+        }
+    
+    def update_session_state(self, session_state):
+        """Update session state with current receiver status - call from main thread only"""
+        status = self.get_status()
+        session_state.receiver_status.update(status)

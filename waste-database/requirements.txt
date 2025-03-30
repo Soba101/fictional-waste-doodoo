@@ -1,0 +1,26 @@
+# Web Framework
+flask==2.0.1
+flask-socketio==5.1.1
+flask-sqlalchemy==2.5.1
+
+# MQTT and Socket
+paho-mqtt==1.6.1
+python-socketio==5.4.0
+eventlet==0.33.0
+
+# Hardware Communication
+pyserial==3.5
+
+# Environment and Database
+python-dotenv==0.19.0
+SQLAlchemy==1.4.23
+pymysql==1.0.3
+cryptography==41.0.3
+requests==2.32.3
+
+# Flask Dependencies
+Werkzeug==2.0.1
+click==8.0.1
+itsdangerous==2.0.1
+Jinja2==3.0.1
+MarkupSafe==2.0.1 

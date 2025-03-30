@@ -5,16 +5,16 @@ import logging
 import threading
 from datetime import datetime
 
-# Import gpiozero with LGPIO factory for Pi 5
+# Import gpiozero
 try:
     from gpiozero import DigitalInputDevice
-    from gpiozero.pins.lgpio import LGPIOFactory
     GPIOZERO_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     GPIOZERO_AVAILABLE = False
+    print(f"Import error: {e}")
 
-class GasSensor:
-    """MQ-2 Gas Sensor interface for Raspberry Pi 5 using gpiozero with LGPIO"""
+class GasSensorModule:
+    """MQ-2 Gas Sensor interface for Raspberry Pi 5"""
     
     def __init__(self, pin=17, active_low=True, logger=None):
         """Initialize the Gas Sensor module
@@ -29,10 +29,11 @@ class GasSensor:
         self.active_low = active_low
         self.thread = None
         self.running = False
+        self.sensor = None
         
         # Check if required libraries are available
         if not GPIOZERO_AVAILABLE:
-            raise ImportError("gpiozero and lgpio libraries are required. Install with: sudo apt install python3-gpiozero python3-lgpio")
+            raise ImportError("gpiozero library is required. Install with: sudo apt install python3-gpiozero")
         
         # Set up logger
         if logger:
@@ -72,13 +73,33 @@ class GasSensor:
             return True
         
         try:
-            # Create LGPIO factory for Pi 5 compatibility
-            factory = LGPIOFactory()
-            self.logger.info("Created LGPIO factory for Pi 5 compatibility")
+            # Clean up any existing resources
+            self.stop()
+            
+            # Wait a bit to ensure GPIO is released
+            time.sleep(1)
+            
+            # Try to identify what's using the GPIO
+            try:
+                import subprocess
+                gpio_status = subprocess.check_output(['gpioinfo', 'gpiochip0'], text=True)
+                self.logger.debug("GPIO status:\n%s", gpio_status)
+            except Exception as e:
+                self.logger.warning(f"Could not get GPIO status: {e}")
             
             # Create the sensor object
-            self.sensor = DigitalInputDevice(self.pin, pin_factory=factory)
-            self.logger.info(f"Gas sensor initialized on GPIO {self.pin}")
+            try:
+                self.sensor = DigitalInputDevice(self.pin)
+                self.logger.info(f"Gas sensor initialized on GPIO {self.pin}")
+                
+                # Test the sensor
+                test_value = self.sensor.value
+                self.logger.debug(f"Initial sensor value: {test_value}")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to create sensor: {e}")
+                self.stop()
+                return False
             
             # Initialize statistics
             self.stats['start_time'] = time.time()
@@ -87,7 +108,6 @@ class GasSensor:
             self.running = True
             self.thread = threading.Thread(target=self._monitor_thread, daemon=True)
             self.thread.start()
-            self.logger.info("Gas sensor monitoring thread started")
             
             # Check initial state
             self._check_sensor_state()
@@ -96,6 +116,7 @@ class GasSensor:
             
         except Exception as e:
             self.logger.error(f"Failed to start gas sensor: {e}")
+            self.stop()  # Clean up on failure
             return False
     
     def _check_sensor_state(self):
@@ -106,7 +127,7 @@ class GasSensor:
             
             # Determine if gas is detected based on value and active_low setting
             if self.active_low:
-                is_gas_detected = not raw_value  # If active_low, then LOW (0) means gas detected
+                is_gas_detected = not bool(raw_value)  # If active_low, then LOW (0) means gas detected
             else:
                 is_gas_detected = bool(raw_value)  # If active_high, then HIGH (1) means gas detected
             
@@ -122,7 +143,7 @@ class GasSensor:
                     self.data['last_detection'] = now
                     self.stats['detections'] += 1
                 else:
-                    self.logger.info("Gas no longer detected")
+                    self.logger.info("Gas level returned to normal")
             
             # Update state
             self.data['gas_detected'] = is_gas_detected
@@ -152,8 +173,8 @@ class GasSensor:
                 
                 # Log status occasionally
                 if self.stats['readings'] % 60 == 0:  # Log every 60 seconds
-                    status = "DETECTED" if self.data['gas_detected'] else "not detected"
-                    self.logger.info(f"Gas status: {status}, total detections: {self.data['detection_count']}")
+                    status = "DETECTED" if self.data['gas_detected'] else "Normal"
+                    self.logger.debug(f"Gas status: {status}, detections: {self.data['detection_count']}")
                 
                 # Sleep for a second
                 time.sleep(1)
@@ -162,7 +183,7 @@ class GasSensor:
                 self.logger.error(f"Error in monitoring thread: {e}")
                 time.sleep(1)
                 
-        self.logger.info("Gas sensor monitoring thread stopped")
+        self.logger.debug("Gas sensor monitoring stopped")
     
     def get_gas_data(self):
         """Get the current gas sensor data
@@ -199,11 +220,24 @@ class GasSensor:
     def stop(self):
         """Stop the gas sensor monitoring"""
         self.running = False
-        if hasattr(self, 'sensor'):
-            # Resources are automatically cleaned up by gpiozero
-            pass
-        self.logger.info("Gas sensor monitoring stopped")
-
+        
+        # Stop the monitoring thread
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1)
+        
+        # Clean up GPIO resources
+        if self.sensor:
+            try:
+                self.sensor.close()
+            except Exception as e:
+                self.logger.error(f"Error closing sensor: {e}")
+            finally:
+                self.sensor = None
+            
+        self.logger.debug("Gas sensor resources cleaned up")
+        
+        # Add a small delay to ensure resources are released
+        time.sleep(0.5)
 
 # Example usage when run directly
 if __name__ == "__main__":
@@ -220,7 +254,7 @@ if __name__ == "__main__":
     
     try:
         # Create and start gas sensor
-        sensor = GasSensor(pin=17, active_low=True)  # active_low=True means LOW signal indicates gas detected
+        sensor = GasSensorModule(pin=17, active_low=True)  # active_low=True means LOW signal indicates gas detected
         
         if sensor.start():
             print("Gas sensor started successfully!")
