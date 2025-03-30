@@ -81,7 +81,7 @@ def handle_new_frame(frame):
         logger.error(f"Error handling new frame: {e}")
         return frame
 
-def verify_gps_fix(gps_module, timeout=30):
+def verify_gps_fix(gps_module, timeout=10):
     """
     Verify GPS fix with timeout.
     
@@ -98,10 +98,10 @@ def verify_gps_fix(gps_module, timeout=30):
             position = gps_module.get_position()
             if position['has_fix']:
                 return True
-            time.sleep(1)
+            time.sleep(0.5)  # Reduced sleep time
         except Exception as e:
             logger.error(f"Error checking GPS fix: {e}")
-            time.sleep(1)
+            time.sleep(0.5)  # Reduced sleep time
     return False
 
 def signal_handler(signum, frame):
@@ -131,8 +131,8 @@ def initialize_modules():
                 gps_module = GPSModule(port=config.GPS_PORT, logger=logger)
                 if gps_module.start():
                     logger.info("GPS module started successfully")
-                    # Verify GPS fix with timeout
-                    if verify_gps_fix(gps_module):
+                    # Verify GPS fix with shorter timeout
+                    if verify_gps_fix(gps_module, timeout=10):
                         logger.info("GPS fix obtained successfully")
                     else:
                         logger.warning("GPS fix not obtained, using Singapore default coordinates")

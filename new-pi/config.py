@@ -12,7 +12,7 @@ GAS_ENABLED = True    # Set to False to disable gas sensor
 
 # Hardware configuration
 GPS_PORT = '/dev/ttyAMA0'  # Port for GPS module
-GAS_PIN = 27               # GPIO pin for MQ-2 DO (Digital Output)
+GAS_PIN = 23               # GPIO pin for MQ-2 DO (Digital Output)
 
 # Network configuration
 DASHBOARD_IP = os.getenv('DASHBOARD_IP', "192.168.18.107")  # Dashboard server IP (Mac)

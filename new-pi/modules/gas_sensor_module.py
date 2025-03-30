@@ -4,6 +4,7 @@ import time
 import logging
 import threading
 from datetime import datetime
+import config
 
 # Import gpiozero
 try:
@@ -16,11 +17,11 @@ except ImportError as e:
 class GasSensorModule:
     """MQ-2 Gas Sensor interface for Raspberry Pi 5"""
     
-    def __init__(self, pin=17, active_low=True, logger=None):
+    def __init__(self, pin=config.GAS_PIN, active_low=True, logger=None):
         """Initialize the Gas Sensor module
         
         Args:
-            pin (int): GPIO pin connected to DO (Digital Output)
+            pin (int): GPIO pin connected to DO (Digital Output), defaults to config.GAS_PIN
             active_low (bool): Set to True if LOW means gas detected (default for MQ-2)
             logger: Optional logger object
         """

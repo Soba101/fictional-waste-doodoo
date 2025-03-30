@@ -4,6 +4,7 @@ import time
 import logging
 from datetime import datetime
 import os
+import config
 
 # Try to import pynmea2 for parsing NMEA sentences
 try:
@@ -43,11 +44,11 @@ class GPSModule:
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.INFO)
         
-        # Initialize GPS data with default values
+        # Initialize GPS data with default values from config
         self.data = {
-            # Position data (defaults to Singapore)
-            'latitude': 1.3521,
-            'longitude': 103.8198,
+            # Position data (defaults from config)
+            'latitude': config.DEFAULT_LAT,
+            'longitude': config.DEFAULT_LON,
             'altitude': 0.0,
             'speed': 0.0,
             'course': 0.0,
@@ -143,7 +144,11 @@ class GPSModule:
         """Background thread to read and parse GPS data"""
         no_data_count = 0
         max_no_data_retries = 5
-        retry_delay = 1  # Start with 1 second delay
+        retry_delay = 10  # Start with 10 second delay
+        max_retry_delay = 300  # Maximum retry delay of 5 minutes
+        last_successful_read = time.time()
+        consecutive_failures = 0
+        max_consecutive_failures = 3  # Maximum number of consecutive failures before using default position
         
         while self.running:
             try:
@@ -153,7 +158,7 @@ class GPSModule:
                         # Check permissions again
                         if not os.access(self.port, os.R_OK | os.W_OK):
                             self.logger.error(f"Lost access to {self.port}")
-                            time.sleep(5)  # Wait longer before retry
+                            time.sleep(60)  # Wait longer before retry
                             continue
                             
                         # Close any existing connection
@@ -178,11 +183,11 @@ class GPSModule:
                         
                         self.logger.info("Reopened GPS serial port")
                         no_data_count = 0
-                        retry_delay = 1  # Reset retry delay
+                        retry_delay = 10  # Reset retry delay
                     except Exception as e:
                         self.logger.error(f"Failed to reopen serial port: {e}")
                         time.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, 30)  # Exponential backoff, max 30 seconds
+                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
                         continue
 
                 # Try to read a line with timeout
@@ -192,6 +197,16 @@ class GPSModule:
                     no_data_count += 1
                     if no_data_count >= max_no_data_retries:
                         self.logger.warning(f"No data received for {max_no_data_retries} attempts")
+                        consecutive_failures += 1
+                        
+                        # If we've had too many consecutive failures, use default position
+                        if consecutive_failures >= max_consecutive_failures:
+                            self.logger.warning("Too many consecutive failures, using default position")
+                            self.set_default_position(config.DEFAULT_LAT, config.DEFAULT_LON)
+                            consecutive_failures = 0
+                            time.sleep(300)  # Wait 5 minutes before trying again
+                            continue
+                        
                         # Close and reopen the port
                         try:
                             self.serial.close()
@@ -199,14 +214,23 @@ class GPSModule:
                             pass
                         self.serial = None
                         time.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, 30)  # Exponential backoff
+                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
                         continue
-                    time.sleep(0.1)
+                    
+                    # If we haven't had a successful read in 5 minutes, use default position
+                    if time.time() - last_successful_read > 300:  # 5 minutes
+                        self.logger.warning("No GPS data for 5 minutes, using default position")
+                        self.set_default_position(config.DEFAULT_LAT, config.DEFAULT_LON)
+                        last_successful_read = time.time()  # Reset timer
+                    
+                    time.sleep(2)  # Increased sleep time between retries
                     continue
                 
                 # Reset counters on successful read
                 no_data_count = 0
-                retry_delay = 1
+                consecutive_failures = 0
+                retry_delay = 10
+                last_successful_read = time.time()
                 
                 # Try to decode the line
                 try:
@@ -280,7 +304,7 @@ class GPSModule:
                         pass
                     self.serial = None
                 time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 30)  # Exponential backoff
+                retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
                 
             except Exception as e:
                 self.logger.error(f"Error reading GPS data: {e}")

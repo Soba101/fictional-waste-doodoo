@@ -73,14 +73,14 @@ def install_system_dependencies():
     """Install required system packages."""
     try:
         # Install required system packages
-        subprocess.run(['sudo', 'apt', 'update'], check=True)
+        subprocess.run(['sudo', 'apt', 'update'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['sudo', 'apt', 'install', '-y',
             'python3-opencv',
             'python3-picamera2',
             'python3-gpiozero',
             'python3-lgpio',
             'python3-serial'
-        ], check=True)
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print("System dependencies installed successfully")
         
         # Get pip path from virtual environment
@@ -91,17 +91,17 @@ def install_system_dependencies():
         print("Installing Python packages in virtual environment...")
         
         # Core dependencies
-        subprocess.run([venv_pip, 'install', 'opencv-python'], check=True)
-        subprocess.run([venv_pip, 'install', 'pyserial'], check=True)
-        subprocess.run([venv_pip, 'install', 'gpiozero'], check=True)
-        subprocess.run([venv_pip, 'install', 'picamera2'], check=True)
+        subprocess.run([venv_pip, 'install', '--quiet', 'opencv-python'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'pyserial'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'gpiozero'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'picamera2'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         # Additional required packages
-        subprocess.run([venv_pip, 'install', 'tflite-runtime'], check=True)
-        subprocess.run([venv_pip, 'install', 'pynmea2'], check=True)
-        subprocess.run([venv_pip, 'install', 'numpy'], check=True)
-        subprocess.run([venv_pip, 'install', 'flask'], check=True)
-        subprocess.run([venv_pip, 'install', 'requests'], check=True)
+        subprocess.run([venv_pip, 'install', '--quiet', 'tflite-runtime'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'pynmea2'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'numpy'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'flask'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([venv_pip, 'install', '--quiet', 'requests'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         print("Python packages installed successfully")
         
