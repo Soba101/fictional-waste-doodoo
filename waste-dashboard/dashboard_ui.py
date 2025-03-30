@@ -847,17 +847,131 @@ def export_analytics_data(cached_data):
 
 def create_device_details(metrics):
     """Create device details view"""
-    st.markdown("### Device Status")
+    st.markdown("### Device Details")
     
     # Force refresh when devices are updated
     current_time = datetime.now().strftime('%H:%M:%S')
     st.markdown(f"<div style='display: none'>{current_time}</div>", unsafe_allow_html=True)
     
-    create_device_status_table(metrics)
+    if not st.session_state.devices:
+        st.info("No devices connected yet. Waiting for connections...")
+        return
+        
+    # Create two main columns for the layout
+    col1, col2 = st.columns([1, 1])
     
-    if st.session_state.get('show_connection_log', False):
-        st.markdown("### Connection Log")
-        display_connection_log()
+    # Device Overview Panel (Left)
+    with col1:
+        st.markdown("#### Device Overview")
+        for device_id, device_info in st.session_state.devices.items():
+            with st.expander(f"📱 {device_id}", expanded=True):
+                # Status and Basic Info
+                is_active = device_id in st.session_state.receiver_status.get("active_devices", set())
+                status = "🟢 Active" if is_active else "🔴 Inactive"
+                st.markdown(f"**Status:** {status}")
+                
+                # Device Info Metrics
+                metrics_col1, metrics_col2 = st.columns(2)
+                with metrics_col1:
+                    st.metric("Detections", device_info.get("detections", 0))
+                    st.metric("Gas Alerts", device_info.get("gas_alerts", 0))
+                with metrics_col2:
+                    # Format uptime if available
+                    uptime = device_info.get("uptime", 0)
+                    uptime_str = f"{int(uptime/3600)}h {int((uptime%3600)/60)}m" if uptime else "Unknown"
+                    st.metric("Uptime", uptime_str)
+                    
+                    # Format last seen
+                    last_updated = device_info.get('last_updated')
+                    if isinstance(last_updated, str):
+                        last_updated = datetime.fromisoformat(last_updated)
+                    last_seen = last_updated.strftime("%H:%M:%S") if last_updated else "Unknown"
+                    st.metric("Last Seen", last_seen)
+                
+                # Sensor Status
+                st.markdown("##### Sensor Status")
+                sensor_col1, sensor_col2 = st.columns(2)
+                with sensor_col1:
+                    # GPS Status
+                    gps_fix = "✓" if device_info.get("has_gps_fix", False) else "✗"
+                    satellites = device_info.get("satellites", 0)
+                    st.markdown(f"**GPS Fix:** {gps_fix} ({satellites} satellites)")
+                    if "lat" in device_info and "lon" in device_info:
+                        st.markdown(f"**Location:** {device_info['lat']:.6f}, {device_info['lon']:.6f}")
+                    if "altitude" in device_info:
+                        st.markdown(f"**Altitude:** {device_info['altitude']:.1f}m")
+                with sensor_col2:
+                    # Gas Sensor
+                    gas_value = device_info.get("gas_value", 0)
+                    gas_detected = "⚠️" if device_info.get("gas_detected", False) else "✓"
+                    st.markdown(f"**Gas Level:** {gas_value} {gas_detected}")
+                
+                # Quick Actions
+                st.markdown("##### Quick Actions")
+                action_col1, action_col2 = st.columns(2)
+                with action_col1:
+                    if st.button("📺 Live Feed", key=f"live_{device_id}"):
+                        st.session_state.show_device_feed = device_id
+                        st.session_state.show_live_feed = True
+                with action_col2:
+                    if st.button("📝 View Logs", key=f"log_{device_id}"):
+                        st.session_state.show_connection_log = True
+                        st.session_state.selected_device_log = device_id
+    
+    # Live Feed Panel (Right)
+    with col2:
+        if st.session_state.get("show_live_feed", False) and "show_device_feed" in st.session_state:
+            device_id = st.session_state.show_device_feed
+            if device_id in st.session_state.devices:
+                st.markdown("#### Live Feed")
+                device_ip = st.session_state.device_ips.get(device_id)
+                
+                if device_ip and device_ip != "Unknown":
+                    # Video feed container
+                    st.markdown(f"""
+                        <div style="width:640px; padding-top:480px; position:relative; background-color:#1e1e1e; border-radius:10px; overflow:hidden;">
+                            <iframe src="http://{device_ip}:8000/video_feed" 
+                                    style="position:absolute; top:0; left:0; width:100%; height:100%;"
+                                    frameborder="0">
+                            </iframe>
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Feed controls
+                    st.markdown("""
+                        <style>
+                        div.stButton > button {
+                            width: 200px;
+                        }
+                        </style>
+                        """, unsafe_allow_html=True)
+                    if st.button("❌ Close Feed"):
+                        st.session_state.show_live_feed = False
+                        st.session_state.show_device_feed = None
+                else:
+                    st.error("Device IP address unknown. Cannot display video feed.")
+        
+        elif st.session_state.get("show_connection_log", False) and "selected_device_log" in st.session_state:
+            device_id = st.session_state.selected_device_log
+            st.markdown(f"#### Connection Log - {device_id}")
+            
+            # Filter and display logs
+            device_logs = [log for log in st.session_state.connection_log 
+                         if "device_id" in log and log["device_id"] == device_id]
+            
+            if device_logs:
+                for log in device_logs[-10:]:
+                    st.text(f"{log['timestamp'].strftime('%H:%M:%S')}: {log['event']}")
+                    if 'details' in log:
+                        st.text(f"  {log['details']}")
+                
+                if st.button("❌ Close Log"):
+                    st.session_state.show_connection_log = False
+                    st.session_state.selected_device_log = None
+            else:
+                st.info("No connection events recorded for this device")
 
 @st.cache_data(ttl=300)
 def get_cached_detection_data():
@@ -866,166 +980,6 @@ def get_cached_detection_data():
     if not df.empty:
         return fill_missing_dates(df)
     return pd.DataFrame(columns=["detection_date", "detection_count"])
-
-def create_device_status_table(metrics):
-    """Create an enhanced device status table"""
-    if not st.session_state.devices:
-        st.info("No devices connected yet. Waiting for connections...")
-        return
-        
-    # Create DataFrame for devices
-    device_data = []
-    for device_id, device_info in st.session_state.devices.items():
-        is_active = device_id in st.session_state.receiver_status.get("active_devices", set())
-        
-        try:
-            last_updated = device_info['last_updated']
-            if isinstance(last_updated, str):
-                last_updated = datetime.fromisoformat(last_updated)
-            time_diff = datetime.now() - last_updated
-            status = "🟢 Active" if time_diff < timedelta(minutes=5) else "🟠 Inactive"
-            last_seen = last_updated.strftime("%H:%M:%S")
-        except:
-            status = "🔴 Unknown"
-            last_seen = "Unknown"
-            
-        device_data.append({
-            "Device ID": device_id,
-            "Status": status,
-            "Detections": device_info["detections"],
-            "Gas Alerts": device_info.get("gas_alerts", 0),
-            "Last Seen": last_seen,
-            "IP Address": st.session_state.device_ips.get(device_id, "Unknown"),
-            "Live Feed": device_id,  # We'll use this to create buttons
-            "Connection Log": device_id  # We'll use this to create buttons
-        })
-    
-    # Convert to DataFrame
-    df_devices = pd.DataFrame(device_data)
-    
-    # Create columns for the table and buttons
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # Create headers first
-        header_cols = st.columns([2, 2, 1, 1, 1.5, 2, 1.5, 1.5])
-        with header_cols[0]:
-            st.markdown("**Device ID**")
-        with header_cols[1]:
-            st.markdown("**Status**")
-        with header_cols[2]:
-            st.markdown("**Detections**")
-        with header_cols[3]:
-            st.markdown("**Gas Alerts**")
-        with header_cols[4]:
-            st.markdown("**Last Seen**")
-        with header_cols[5]:
-            st.markdown("**IP Address**")
-        with header_cols[6]:
-            st.markdown("**Live Feed**")
-        with header_cols[7]:
-            st.markdown("**Log**")
-        
-        # Add a separator line
-        st.markdown("---")
-        
-        # Display the table rows
-        for index, row in df_devices.iterrows():
-            cols = st.columns([2, 2, 1, 1, 1.5, 2, 1.5, 1.5])
-            with cols[0]:
-                st.write(row["Device ID"])
-            with cols[1]:
-                st.write(row["Status"])
-            with cols[2]:
-                st.write(str(row["Detections"]))
-            with cols[3]:
-                st.write(str(row["Gas Alerts"]))
-            with cols[4]:
-                st.write(row["Last Seen"])
-            with cols[5]:
-                st.write(row["IP Address"])
-            with cols[6]:
-                if st.button("📺 Live", key=f"live_{row['Device ID']}"):
-                    st.session_state.show_device_feed = row["Device ID"]
-                    st.session_state.show_live_feed = True
-            with cols[7]:
-                if st.button("📝", key=f"log_{row['Device ID']}"):
-                    st.session_state.show_connection_log = True
-                    st.session_state.selected_device_log = row["Device ID"]
-    
-    # Show live feed or connection log in the second column if selected
-    with col2:
-        if st.session_state.get("show_live_feed", False) and "show_device_feed" in st.session_state:
-            device_id = st.session_state.show_device_feed
-            if device_id in st.session_state.devices:
-                device_data = st.session_state.devices[device_id]
-                st.markdown("### Live Feed")
-                
-                # Get device IP address
-                device_ip = st.session_state.device_ips.get(device_id, None)
-                if device_ip and device_ip != "Unknown":
-                    # Create iframe to show live feed from device's web server
-                    video_url = f"http://{device_ip}:8000/video_feed"
-                    st.markdown(f"""
-                        <div style="width:100%; height:400px; background-color:#1e1e1e; border-radius:10px; overflow:hidden;">
-                            <iframe src="{video_url}" 
-                                    width="100%" 
-                                    height="100%" 
-                                    frameborder="0" 
-                                    style="background-color:#1e1e1e;">
-                            </iframe>
-                        </div>
-                        """, 
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.error("Device IP address unknown. Cannot display video feed.")
-                
-                # Add a close button
-                if st.button("❌ Close Feed"):
-                    st.session_state.show_live_feed = False
-                    st.session_state.show_device_feed = None
-        
-        elif st.session_state.get("show_connection_log", False) and "selected_device_log" in st.session_state:
-            device_id = st.session_state.selected_device_log
-            st.markdown(f"### Connection Log - {device_id}")
-            
-            # Filter connection log for selected device
-            device_logs = [log for log in st.session_state.connection_log 
-                         if "device_id" in log and log["device_id"] == device_id]
-            
-            # Display logs
-            for log in device_logs[-10:]:  # Show last 10 logs
-                st.text(f"{log['timestamp'].strftime('%H:%M:%S')}: {log['event']}")
-                if 'details' in log:
-                    st.text(f"  {log['details']}")
-            
-            # Add a close button
-            if st.button("❌ Close Log"):
-                st.session_state.show_connection_log = False
-                st.session_state.selected_device_log = None
-
-def display_connection_log():
-    """Display the connection log with formatting"""
-    if not st.session_state.connection_log:
-        st.info("No connection events recorded yet")
-        return
-        
-    for entry in reversed(st.session_state.connection_log[-10:]):
-        timestamp = entry["timestamp"].strftime("%H:%M:%S")
-        device = entry.get("device_id", "")
-        event = entry["event"]
-        details = entry.get("details", "")
-        
-        # Create a formatted log entry
-        if device:
-            st.markdown(f"**{timestamp}** [{device}] {event}")
-        else:
-            st.markdown(f"**{timestamp}** {event}")
-            
-        if details:
-            st.markdown(f"<span style='margin-left:20px; color: #999;'>{details}</span>", 
-                      unsafe_allow_html=True)
 
 def display_trend_analysis(start_date, end_date):
     """Display trend analysis for the selected date range"""
