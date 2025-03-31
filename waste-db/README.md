@@ -74,7 +74,21 @@ Stores image data for detections.
 ### Prerequisites
 - MariaDB/MySQL server installed (version 10.5+ recommended)
 - Root or administrative access to the database server
-- Python 3.7+ with required packages (see requirements.txt)
+- Python 3.7+ with required packages:
+  - Core dependencies:
+    - pymysql==1.0.3
+    - cryptography==41.0.3
+  - Image processing:
+    - opencv-python==4.8.0
+    - numpy==1.24.3
+  - Standard library modules (included by default):
+    - logging
+    - socket
+    - threading
+    - json
+    - os
+    - base64
+    - datetime
 
 ### Database Creation
 
@@ -157,6 +171,9 @@ The database receiver (`modified-db-receiver.py`) acts as a bridge between edge 
 - Listens on port 5002 for incoming TCP connections
 - Processes JSON data from edge devices
 - Saves detection data, including JPEG images, to the database
+- Includes comprehensive logging functionality
+- Handles image processing and coordinate scaling
+- Automatically scales normalized coordinates to pixel coordinates (640x480)
 
 ### Running the Database Receiver
 
@@ -172,6 +189,10 @@ The database receiver (`modified-db-receiver.py`) acts as a bridge between edge 
    DB_USER = 'waste_user'   # Update if your username is different
    DB_PASSWORD = 'password' # Use your actual password
    DB_NAME = 'waste_detection'
+
+   # Server configuration
+   HOST = '0.0.0.0'  # Listen on all interfaces
+   PORT = 5002       # Port to listen on
    ```
 
 3. Run the receiver:
@@ -179,7 +200,25 @@ The database receiver (`modified-db-receiver.py`) acts as a bridge between edge 
    python3 modified-db-receiver.py
    ```
 
-4. The receiver will create a log file in the `logs` directory.
+4. The receiver will create a log file in the `logs` directory with timestamp-based filenames:
+   ```
+   logs/db_receiver_YYYYMMDD_HHMMSS.log
+   ```
+
+### Logging
+
+The database receiver includes comprehensive logging that captures:
+- Server startup and configuration
+- Client connections and disconnections
+- Data reception and processing
+- Database operations
+- Image processing status
+- Errors and warnings
+
+View logs with:
+```bash
+tail -f logs/db_receiver_*.log
+```
 
 ### Expected JSON Format
 
