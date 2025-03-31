@@ -56,6 +56,12 @@ class CameraModule:
         self.thread.start()
         logger.info("Camera capture thread started")
         
+        # Verify frame callback is set
+        if self.frame_callback is None:
+            logger.warning("No frame callback set - frames will not be processed by detection module")
+        else:
+            logger.info("Frame callback is set - frames will be sent to detection module")
+        
     def stop(self):
         """Stop the camera capture thread."""
         self.running = False
@@ -176,6 +182,10 @@ class CameraModule:
     
     def _read_frames(self):
         """Read and process frames from the camera process."""
+        frame_count = 0
+        last_frame_time = time.time()
+        target_frame_interval = 1.0 / config.CAMERA_FPS  # Calculate target interval between frames
+        
         while self.running:
             try:
                 # Read until we find JPEG start marker (0xFF 0xD8)
@@ -205,28 +215,39 @@ class CameraModule:
                             return
                         jpeg_data += b2
                         if b2[0] == 0xD9:
-                            # Found end of JPEG
                             break
                 
-                # Decode JPEG to frame
-                frame = cv2.imdecode(
-                    np.frombuffer(jpeg_data, dtype=np.uint8),
-                    cv2.IMREAD_COLOR
-                )
-                
-                if frame is not None:
-                    # Update the latest frame
-                    with self.frame_lock:
-                        self.latest_frame = frame
-                        
-                    # Call the callback function if provided
-                    if self.frame_callback:
-                        self.frame_callback(frame)
-                else:
+                # Decode JPEG data to frame
+                frame = cv2.imdecode(np.frombuffer(jpeg_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
                     logger.error("Failed to decode frame")
-                    
+                    continue
+                
+                frame_count += 1
+                
+                # Control frame rate
+                current_time = time.time()
+                elapsed = current_time - last_frame_time
+                if elapsed < target_frame_interval:
+                    time.sleep(target_frame_interval - elapsed)
+                    continue
+                
+                last_frame_time = current_time
+                
+                # Update latest frame
+                with self.frame_lock:
+                    self.latest_frame = frame
+                
+                # Send frame to detection module if callback exists
+                if self.frame_callback:
+                    try:
+                        self.frame_callback(frame)
+                    except Exception as e:
+                        logger.error(f"Error sending frame to detection module: {e}")
+                
             except Exception as e:
-                logger.error(f"Error processing frame: {e}")
+                logger.error(f"Error reading frame: {e}")
+                logger.exception("Full traceback:")
                 time.sleep(0.1)  # Avoid tight loop on errors
     
     def _generate_dummy_frames(self):
@@ -254,10 +275,8 @@ class CameraModule:
             
             # Add text with timestamp
             timestamp = now.strftime("%H:%M:%S")
-            cv2.putText(pattern, "TEST PATTERN - NO CAMERA", (50, 50), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            cv2.putText(pattern, timestamp, (50, 100), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            cv2.putText(pattern, "TEST PATTERN - NO CAMERA", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            cv2.putText(pattern, timestamp, (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             
             # Update the latest frame
             with self.frame_lock:

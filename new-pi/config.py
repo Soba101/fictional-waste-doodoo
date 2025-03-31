@@ -11,7 +11,9 @@ GPS_ENABLED = True    # Set to False to disable GPS
 GAS_ENABLED = True    # Set to False to disable gas sensor
 
 # Hardware configuration
-GPS_PORT = '/dev/ttyAMA0'  # Port for GPS module
+GPS_PORT = '/dev/serial0'  # Updated to use the more reliable serial0 alias
+GPS_BAUDRATE = 9600       # NEO-6M default baud rate
+GPS_TIMEOUT = 2.0        # Serial timeout in seconds
 GAS_PIN = 23               # GPIO pin for MQ-2 DO (Digital Output)
 
 # Network configuration
@@ -42,6 +44,7 @@ DEFAULT_LON = float(os.getenv('DEFAULT_LON', "103.8198"))
 
 # Logging configuration
 LOG_DIR = "logs"
+LOG_LEVEL = logging.WARNING  # Change default log level to WARNING
 try:
     os.makedirs(LOG_DIR, exist_ok=True)
     LOG_FILE = os.path.join(LOG_DIR, f"pi_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")

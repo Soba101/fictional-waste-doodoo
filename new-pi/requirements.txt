@@ -1,11 +1,11 @@
 # Raspberry Pi Detection Requirements
 
 # Computer vision
-opencv-python==4.7.0.72  # Compatible with Raspberry Pi
-numpy==1.24.3
+opencv-python>=4.8.0  # Compatible with Raspberry Pi
+numpy>=1.24.0
 
 # Machine Learning
-tflite-runtime==2.14.0  # For running TFLite models on Raspberry Pi
+tflite-runtime>=2.9.0  # For running TFLite models on Raspberry Pi
 
 # Web server
 flask==2.3.3
@@ -24,6 +24,9 @@ pynmea2==1.19.0  # For GPS NMEA parsing
 
 # MQTT
 paho-mqtt==1.6.1
+
+# GPU acceleration dependencies
+libedgetpu1.0  # For GPU acceleration on Raspberry Pi
 
 # Standard library modules are included by default:
 # - logging

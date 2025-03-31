@@ -25,11 +25,12 @@ class CommunicationModule:
         logger.info("Starting communication module initialization...")
         self.gps_module = gps_module
         self.gas_module = gas_module
+        self.client = None
+        self.running = False
         self.connection_attempts = 0
         self.successful_connections = 0
         self.failed_connections = 0
         self.start_time = time.time()
-        self.running = False
         self.max_retries = 5
         self.retry_delay = 5  # seconds
         self.last_heartbeat = time.time()  # Initialize to current time
@@ -39,10 +40,10 @@ class CommunicationModule:
         # Frame buffer settings
         self.frame_buffer = []
         self.frame_buffer_lock = threading.Lock()
-        self.max_buffer_size = 10  # Maximum number of frames to buffer
-        self.target_fps = 15  # Target frames per second
-        self.frame_interval = 1.0 / self.target_fps  # Time between frames
+        self.max_buffer_size = 5  # Reduced from default
+        self.frame_interval = 0.5  # Send frames every 500ms instead of continuously
         self.last_frame_time = 0
+        self.frame_sender_thread = None
         
         # MQTT client for dashboard communication
         logger.info(f"Initializing MQTT client with ID: pi_{config.DEVICE_ID}")
@@ -477,11 +478,11 @@ class CommunicationModule:
                 import cv2
                 import base64
                 
-                # Resize frame to reduce size
-                resized_frame = cv2.resize(frame, (640, 480))
+                # Resize frame to reduce size (smaller resolution)
+                resized_frame = cv2.resize(frame, (480, 360))  # Reduced from 640x480
                 
-                # Convert to JPEG format
-                _, buffer = cv2.imencode('.jpg', resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                # Convert to JPEG format with lower quality
+                _, buffer = cv2.imencode('.jpg', resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])  # Reduced quality
                 
                 # Encode as base64 string
                 frame_base64 = base64.b64encode(buffer).decode('utf-8')
@@ -507,6 +508,60 @@ class CommunicationModule:
             
         except Exception as e:
             logger.error(f"Error sending detection to dashboard: {e}")
+    
+    def send_detection_to_database(self, predictions, frame=None):
+        """Send detection data to the database.
+        
+        Args:
+            predictions: List of prediction dictionaries
+            frame: Optional frame image data
+        """
+        try:
+            # Get current status data
+            status_data = self._get_status_data()
+            
+            # Create detection data with all required fields
+            detection_data = {
+                'device_id': config.DEVICE_ID,
+                'timestamp': datetime.now().isoformat(),
+                'predictions': predictions,
+                'num_detections': len(predictions),
+                'lat': status_data.get('lat', 0.0),
+                'lon': status_data.get('lon', 0.0),
+                'has_gps_fix': status_data.get('has_gps_fix', False),
+                'satellites': status_data.get('satellites', 0),
+                'altitude': status_data.get('altitude', 0.0),
+                'gas_value': status_data.get('gas_value', 0.0),
+                'gas_detected': status_data.get('gas_detected', False)
+            }
+            
+            # Add frame data if provided
+            if frame is not None:
+                import cv2
+                import base64
+                
+                # Resize frame to reduce size
+                resized_frame = cv2.resize(frame, (480, 360))
+                
+                # Convert to JPEG format with lower quality
+                _, buffer = cv2.imencode('.jpg', resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                
+                # Encode as base64 string
+                frame_base64 = base64.b64encode(buffer).decode('utf-8')
+                detection_data['frame'] = frame_base64
+            
+            # Publish detection data
+            self.client.publish(
+                f"devices/{config.DEVICE_ID}/detections/db",
+                json.dumps(detection_data),
+                qos=1
+            )
+            
+            logger.info(f"Published {len(predictions)} detections to database")
+            
+        except Exception as e:
+            logger.error(f"Error sending detection to database: {e}")
+            logger.exception("Full traceback:")
     
     def get_connection_stats(self):
         """Get connection statistics."""

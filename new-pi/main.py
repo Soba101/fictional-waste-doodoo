@@ -73,12 +73,19 @@ def handle_new_frame(frame):
         frame: The new camera frame
     """
     try:
+        # Log frame info
+        logger.info(f"Received new frame: shape={frame.shape}, dtype={frame.dtype}")
+        
         # Add frame to detection module's buffer
         if detection_module:
             detection_module.add_frame(frame)
+            logger.info("Frame added to detection module buffer")
+        else:
+            logger.warning("Detection module not initialized - frame not processed")
         return frame
     except Exception as e:
         logger.error(f"Error handling new frame: {e}")
+        logger.exception("Full traceback:")
         return frame
 
 def verify_gps_fix(gps_module, timeout=10):
@@ -115,9 +122,12 @@ def initialize_modules():
     global gps_module, gas_sensor, detection_module, communication_module, camera_module, web_server
     
     try:
+        logger.info("Starting module initialization...")
+        
         # First, ensure any existing GPIO resources are cleaned up
         try:
             if gas_sensor:
+                logger.info("Cleaning up existing gas sensor...")
                 gas_sensor.stop()
                 time.sleep(1)
         except Exception as e:
@@ -128,25 +138,27 @@ def initialize_modules():
             try:
                 from modules.gps_module import GPSModule
                 logger.info("Initializing GPS module...")
-                gps_module = GPSModule(port=config.GPS_PORT, logger=logger)
+                gps_module = GPSModule(
+                    port=config.GPS_PORT,
+                    baudrate=config.GPS_BAUDRATE,
+                    logger=logger
+                )
                 if gps_module.start():
                     logger.info("GPS module started successfully")
-                    # Verify GPS fix with shorter timeout
-                    if verify_gps_fix(gps_module, timeout=10):
+                    # Verify GPS fix with timeout from config
+                    if verify_gps_fix(gps_module, timeout=config.GPS_TIMEOUT):
                         logger.info("GPS fix obtained successfully")
                     else:
-                        logger.warning("GPS fix not obtained, using Singapore default coordinates")
-                        # Set default Singapore coordinates
+                        logger.warning("GPS fix not obtained, using default coordinates")
                         gps_module.set_default_position(
-                            latitude=1.3521,  # Singapore latitude
-                            longitude=103.8198  # Singapore longitude
+                            latitude=config.DEFAULT_LAT,
+                            longitude=config.DEFAULT_LON
                         )
                 else:
-                    logger.warning("Failed to start GPS module, using Singapore default coordinates")
-                    # Set default Singapore coordinates
+                    logger.warning("Failed to start GPS module, using default coordinates")
                     gps_module.set_default_position(
-                        latitude=1.3521,  # Singapore latitude
-                        longitude=103.8198  # Singapore longitude
+                        latitude=config.DEFAULT_LAT,
+                        longitude=config.DEFAULT_LON
                     )
             except Exception as e:
                 logger.error(f"Error initializing GPS module: {e}")
@@ -178,11 +190,36 @@ def initialize_modules():
         # Initialize detection module
         try:
             from modules.detection_module import DetectionModule
+            logger.info("Starting detection module initialization...")
+            logger.info(f"Current working directory: {os.getcwd()}")
+            logger.info(f"Python path: {sys.path}")
+            
+            # Check if model file exists
+            model_path = os.path.join(os.path.dirname(__file__), 'models', 'best_integer_quant.tflite')
+            if os.path.exists(model_path):
+                logger.info(f"Model file found at: {model_path}")
+                logger.info(f"Model file size: {os.path.getsize(model_path) / (1024*1024):.2f} MB")
+            else:
+                logger.error(f"Model file not found at: {model_path}")
+                raise FileNotFoundError(f"Model file not found at: {model_path}")
+            
             detection_module = DetectionModule(detection_callback=handle_detection)
+            logger.info("Detection module instance created")
+            
             detection_module.start()  # Start the processing thread
-            logger.info("Detection module initialized and started")
+            logger.info("Detection module processing thread started")
+            
+            # Verify detection module is running
+            time.sleep(1)  # Give it time to initialize
+            if detection_module.running:
+                logger.info("Detection module is running successfully")
+            else:
+                logger.error("Detection module failed to start")
+                raise RuntimeError("Detection module failed to start")
+                
         except Exception as e:
             logger.error(f"Error initializing detection module: {e}")
+            logger.exception("Full traceback:")
             raise  # Detection module is critical, cannot continue without it
         
         # Add delay before initializing communication module
@@ -196,44 +233,43 @@ def initialize_modules():
             logger.info("Communication module initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing communication module: {e}")
-            raise  # Communication module is critical, cannot continue without it
-        
-        # Add delay before initializing camera module
-        time.sleep(1)
+            logger.warning("Continuing without communication functionality")
         
         # Initialize camera module
         try:
             from modules.camera_module import CameraModule
+            logger.info("Initializing camera module...")
             camera_module = CameraModule(frame_callback=handle_new_frame)
-            camera_module.start()
-            logger.info("Camera module initialized and started")
+            if camera_module.start():
+                logger.info("Camera module started successfully")
+            else:
+                logger.warning("Failed to start camera module")
         except Exception as e:
             logger.error(f"Error initializing camera module: {e}")
-            raise  # Camera module is critical, cannot continue without it
+            logger.warning("Continuing without camera functionality")
         
-        # Add delay before initializing web server
-        time.sleep(1)
-        
-        # Initialize and start web server
+        # Initialize web server
         try:
             from modules.web_server import WebServer
+            logger.info("Initializing web server...")
             web_server = WebServer(
-                camera_module, 
-                detection_module, 
-                communication_module, 
-                gps_module, 
-                gas_sensor
+                camera_module=camera_module,
+                detection_module=detection_module,
+                communication_module=communication_module,
+                gps_module=gps_module,
+                gas_module=gas_sensor
             )
-            logger.info("Web server module initialized")
+            logger.info("Web server initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing web server: {e}")
-            raise  # Web server is critical, cannot continue without it
+            logger.warning("Continuing without web server functionality")
         
+        logger.info("All modules initialized successfully")
         return True
         
     except Exception as e:
-        logger.error(f"Error initializing modules: {e}")
-        cleanup()
+        logger.error(f"Error during module initialization: {e}")
+        logger.exception("Full traceback:")
         return False
 
 def cleanup():

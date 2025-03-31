@@ -4,6 +4,7 @@ Helper utility functions for the waste detection system.
 import socket
 import subprocess
 import logging
+import config
 
 logger = logging.getLogger('utils.helpers')
 
@@ -57,26 +58,38 @@ def get_network_interfaces():
     return interfaces
 
 def setup_logging(logger):
-    """
-    Set up logging configuration.
-    
-    Args:
-        logger: Logger instance to configure
-    """
-    import logging
-    import config
-    
-    # Create handler for file logging
-    file_handler = logging.FileHandler(config.LOG_FILE)
-    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
-    
-    # Create handler for console logging
-    console_handler = logging.StreamHandler()
-    console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(console_formatter)
-    
-    # Add both handlers to the logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    logger.setLevel(logging.INFO)
+    """Set up logging configuration."""
+    try:
+        # Create file handler
+        fh = logging.FileHandler(config.LOG_FILE)
+        fh.setLevel(logging.DEBUG)  # Set to DEBUG for file logging
+        
+        # Create console handler
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.INFO)  # Set to INFO for console logging
+        
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        ch.setFormatter(formatter)
+        
+        # Remove any existing handlers
+        logger.handlers = []
+        
+        # Add handlers to logger
+        logger.addHandler(fh)
+        logger.addHandler(ch)
+        
+        # Set overall logger level to DEBUG
+        logger.setLevel(logging.DEBUG)
+        
+        # Log successful setup
+        logger.info("Logging system initialized")
+        
+    except Exception as e:
+        print(f"Error setting up logging: {e}")
+        # Set up basic logging as fallback
+        logging.basicConfig(
+            level=logging.DEBUG,  # Set to DEBUG for maximum visibility
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )

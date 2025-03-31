@@ -73,6 +73,15 @@ class GPSModule:
             'errors': 0,
             'start_time': None
         }
+
+        # Connection management
+        self.connection_attempts = 0
+        self.max_connection_attempts = 3
+        self.base_retry_delay = 10
+        self.max_retry_delay = 300  # 5 minutes
+        self.last_successful_read = time.time()
+        self.fix_timeout = 300  # 5 minutes
+        self.no_data_timeout = 60  # 1 minute
     
     def set_default_position(self, latitude, longitude):
         """Set default position when GPS fix is not available.
@@ -104,14 +113,14 @@ class GPSModule:
                 self.logger.error("Please run: sudo chmod 666 /dev/ttyAMA0")
                 return False
             
-            # Open serial port
+            # Open serial port with more robust settings
             self.logger.info(f"Opening serial port {self.port} at {self.baudrate} baud")
             self.serial = serial.Serial(
                 port=self.port,
                 baudrate=self.baudrate,
-                timeout=1.0,
-                write_timeout=1.0,
-                inter_byte_timeout=1.0
+                timeout=2.0,  # Increased timeout
+                write_timeout=2.0,  # Increased write timeout
+                inter_byte_timeout=0.5  # Added inter-byte timeout
             )
             
             # Flush any existing data
@@ -126,10 +135,9 @@ class GPSModule:
             self.thread.start()
             self.logger.info("GPS reading thread started")
             
-            # Wait briefly to see if we can read data
-            time.sleep(2)
-            if not self.data.get('last_update'):
-                self.logger.warning("No GPS data received yet, but continuing")
+            # Initialize connection statistics
+            self.stats['start_time'] = time.time()
+            self.last_successful_read = time.time()
             
             return True
             
@@ -144,21 +152,23 @@ class GPSModule:
         """Background thread to read and parse GPS data"""
         no_data_count = 0
         max_no_data_retries = 5
-        retry_delay = 10  # Start with 10 second delay
-        max_retry_delay = 300  # Maximum retry delay of 5 minutes
-        last_successful_read = time.time()
-        consecutive_failures = 0
-        max_consecutive_failures = 3  # Maximum number of consecutive failures before using default position
+        retry_delay = 30  # Increased base retry delay to 30 seconds
+        last_warning_time = time.time()
+        warning_interval = 60  # Only log warnings every 60 seconds
         
         while self.running:
             try:
+                # Check if serial port needs reopening
                 if self.serial is None or not self.serial.is_open:
-                    self.logger.warning("Serial port closed, attempting to reopen...")
+                    if time.time() - last_warning_time > warning_interval:
+                        self.logger.warning("Serial port closed, attempting to reopen...")
+                        last_warning_time = time.time()
+                    
+                    # Sleep before retry
+                    time.sleep(retry_delay)
+                    
                     try:
-                        # Check permissions again
                         if not os.access(self.port, os.R_OK | os.W_OK):
-                            self.logger.error(f"Lost access to {self.port}")
-                            time.sleep(60)  # Wait longer before retry
                             continue
                             
                         # Close any existing connection
@@ -173,21 +183,22 @@ class GPSModule:
                         self.serial = serial.Serial(
                             port=self.port,
                             baudrate=self.baudrate,
-                            timeout=1.0,
-                            write_timeout=1.0,
-                            inter_byte_timeout=1.0
+                            timeout=2.0,
+                            write_timeout=2.0
                         )
+                        
                         # Flush buffers on reopen
                         self.serial.reset_input_buffer()
                         self.serial.reset_output_buffer()
                         
-                        self.logger.info("Reopened GPS serial port")
-                        no_data_count = 0
-                        retry_delay = 10  # Reset retry delay
+                        if time.time() - last_warning_time > warning_interval:
+                            self.logger.info("Reopened GPS serial port")
+                            last_warning_time = time.time()
+                            
                     except Exception as e:
-                        self.logger.error(f"Failed to reopen serial port: {e}")
-                        time.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
+                        if time.time() - last_warning_time > warning_interval:
+                            self.logger.error(f"Failed to reopen serial port: {e}")
+                            last_warning_time = time.time()
                         continue
 
                 # Try to read a line with timeout
@@ -196,120 +207,47 @@ class GPSModule:
                 if not line:
                     no_data_count += 1
                     if no_data_count >= max_no_data_retries:
-                        self.logger.warning(f"No data received for {max_no_data_retries} attempts")
-                        consecutive_failures += 1
-                        
-                        # If we've had too many consecutive failures, use default position
-                        if consecutive_failures >= max_consecutive_failures:
-                            self.logger.warning("Too many consecutive failures, using default position")
+                        if time.time() - last_warning_time > warning_interval:
+                            self.logger.warning("No GPS data received, using default position")
                             self.set_default_position(config.DEFAULT_LAT, config.DEFAULT_LON)
-                            consecutive_failures = 0
-                            time.sleep(300)  # Wait 5 minutes before trying again
-                            continue
-                        
-                        # Close and reopen the port
-                        try:
-                            self.serial.close()
-                        except:
-                            pass
-                        self.serial = None
-                        time.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
+                            last_warning_time = time.time()
+                        time.sleep(5)  # Increased sleep time between retries
                         continue
                     
-                    # If we haven't had a successful read in 5 minutes, use default position
-                    if time.time() - last_successful_read > 300:  # 5 minutes
-                        self.logger.warning("No GPS data for 5 minutes, using default position")
-                        self.set_default_position(config.DEFAULT_LAT, config.DEFAULT_LON)
-                        last_successful_read = time.time()  # Reset timer
-                    
-                    time.sleep(2)  # Increased sleep time between retries
+                    time.sleep(1)
                     continue
                 
                 # Reset counters on successful read
                 no_data_count = 0
-                consecutive_failures = 0
-                retry_delay = 10
-                last_successful_read = time.time()
                 
-                # Try to decode the line
+                # Process the received line
                 try:
                     decoded = line.decode('ascii', errors='ignore').strip()
                     if not decoded:
                         continue
-                        
-                    # Parse NMEA sentence if pynmea2 is available
+                    
+                    # Parse NMEA sentence
                     if PYNMEA_AVAILABLE and decoded.startswith('$'):
-                        try:
-                            msg = pynmea2.parse(decoded)
-                            
-                            if isinstance(msg, pynmea2.GGA):
-                                self.data['latitude'] = msg.latitude
-                                self.data['longitude'] = msg.longitude
-                                self.data['altitude'] = msg.altitude
-                                self.data['has_fix'] = msg.gps_qual > 0
-                                self.data['satellites'] = msg.num_sats
-                                self.data['last_update'] = datetime.now()
-                                
-                            elif isinstance(msg, pynmea2.GSA):
-                                self.data['fix_type'] = msg.mode_fix_type
-                                self.data['pdop'] = msg.pdop
-                                self.data['hdop'] = msg.hdop
-                                self.data['vdop'] = msg.vdop
-                                
-                        except pynmea2.ParseError:
-                            # Invalid NMEA sentence, ignore
-                            continue
+                        self._parse_nmea_sentence(decoded)
                     else:
-                        # Basic parsing without pynmea2
-                        if decoded.startswith('$GPGGA'):
-                            parts = decoded.split(',')
-                            if len(parts) >= 15:
-                                try:
-                                    # Parse latitude
-                                    lat_deg = float(parts[2][:2])
-                                    lat_min = float(parts[2][2:])
-                                    lat = lat_deg + lat_min/60
-                                    if parts[3] == 'S':
-                                        lat = -lat
-                                    
-                                    # Parse longitude
-                                    lon_deg = float(parts[4][:3])
-                                    lon_min = float(parts[4][3:])
-                                    lon = lon_deg + lon_min/60
-                                    if parts[5] == 'W':
-                                        lon = -lon
-                                    
-                                    # Update position data
-                                    self.data['latitude'] = lat
-                                    self.data['longitude'] = lon
-                                    self.data['altitude'] = float(parts[9]) if parts[9] else 0.0
-                                    self.data['has_fix'] = int(parts[6]) > 0
-                                    self.data['satellites'] = int(parts[7]) if parts[7] else 0
-                                    self.data['last_update'] = datetime.now()
-                                    
-                                except (ValueError, IndexError):
-                                    continue
-                                    
+                        self._parse_basic_sentence(decoded)
+                    
                 except UnicodeDecodeError:
-                    # Ignore decode errors
                     continue
                     
             except serial.SerialException as e:
-                self.logger.error(f"Serial port error: {e}")
-                if self.serial:
-                    try:
-                        self.serial.close()
-                    except:
-                        pass
-                    self.serial = None
+                if time.time() - last_warning_time > warning_interval:
+                    self.logger.error(f"Serial port error: {e}")
+                    last_warning_time = time.time()
+                self.serial = None
                 time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
                 
             except Exception as e:
-                self.logger.error(f"Error reading GPS data: {e}")
-                time.sleep(0.1)
-                
+                if time.time() - last_warning_time > warning_interval:
+                    self.logger.error(f"Error reading GPS data: {e}")
+                    last_warning_time = time.time()
+                time.sleep(5)
+        
         # Clean up
         if self.serial:
             try:
@@ -319,52 +257,66 @@ class GPSModule:
         
         self.logger.info("GPS reading thread stopped")
     
-    def _process_rmc(self, msg):
-        """Process RMC (Recommended Minimum) sentence"""
-        if hasattr(msg, 'status') and msg.status == 'A':  # 'A' means valid
-            # Update position
-            self.data['latitude'] = msg.latitude
-            self.data['longitude'] = msg.longitude
-            self.data['has_fix'] = True
-            self.data['last_fix'] = datetime.now()
-            self.stats['valid_fixes'] += 1
+    def _parse_nmea_sentence(self, sentence):
+        """Parse NMEA sentence using pynmea2."""
+        try:
+            msg = pynmea2.parse(sentence)
             
-            # Update speed and course if available
-            if hasattr(msg, 'spd_over_grnd'):
-                self.data['speed'] = msg.spd_over_grnd
-            if hasattr(msg, 'true_course') and msg.true_course:
-                self.data['course'] = msg.true_course
+            if isinstance(msg, pynmea2.GGA):
+                self.data['latitude'] = msg.latitude
+                self.data['longitude'] = msg.longitude
+                self.data['altitude'] = msg.altitude
+                self.data['has_fix'] = msg.gps_qual > 0
+                self.data['satellites'] = msg.num_sats
+                self.data['last_update'] = datetime.now()
                 
-            # Update timestamp and datestamp
-            self.data['timestamp'] = msg.timestamp
-            self.data['datestamp'] = msg.datestamp
-            
-            # Log position occasionally (every 30 fixes)
-            if self.stats['valid_fixes'] % 30 == 0:
-                self.logger.info(f"Position: {self.data['latitude']:.6f}, {self.data['longitude']:.6f}")
+                if msg.gps_qual > 0:
+                    self.stats['valid_fixes'] += 1
+                    self.data['last_fix'] = datetime.now()
+                
+            elif isinstance(msg, pynmea2.GSA):
+                self.data['fix_type'] = msg.mode_fix_type
+                self.data['pdop'] = msg.pdop
+                self.data['hdop'] = msg.hdop
+                self.data['vdop'] = msg.vdop
+                
+        except pynmea2.ParseError:
+            return
     
-    def _process_gga(self, msg):
-        """Process GGA (Global Positioning System Fix Data) sentence"""
-        # Update fix quality
-        if hasattr(msg, 'gps_qual'):
-            self.data['fix_quality'] = msg.gps_qual
-            
-        # Update satellite count
-        if hasattr(msg, 'num_sats'):
-            self.data['satellites'] = int(msg.num_sats) if msg.num_sats else 0
-            
-        # Update altitude
-        if hasattr(msg, 'altitude'):
-            self.data['altitude'] = float(msg.altitude) if msg.altitude else 0.0
-            
-        # Update HDOP (Horizontal Dilution of Precision)
-        if hasattr(msg, 'horizontal_dil'):
-            self.data['hdop'] = float(msg.horizontal_dil) if msg.horizontal_dil else 99.9
-    
-    def _process_gsa(self, msg):
-        """Process GSA (GNSS DOP and Active Satellites) sentence"""
-        # This is mainly for additional precision data, not implementing for basic functionality
-        pass
+    def _parse_basic_sentence(self, sentence):
+        """Basic parsing without pynmea2."""
+        if sentence.startswith('$GPGGA'):
+            parts = sentence.split(',')
+            if len(parts) >= 15:
+                try:
+                    # Parse latitude
+                    lat_deg = float(parts[2][:2])
+                    lat_min = float(parts[2][2:])
+                    lat = lat_deg + lat_min/60
+                    if parts[3] == 'S':
+                        lat = -lat
+                    
+                    # Parse longitude
+                    lon_deg = float(parts[4][:3])
+                    lon_min = float(parts[4][3:])
+                    lon = lon_deg + lon_min/60
+                    if parts[5] == 'W':
+                        lon = -lon
+                    
+                    # Update position data
+                    self.data['latitude'] = lat
+                    self.data['longitude'] = lon
+                    self.data['altitude'] = float(parts[9]) if parts[9] else 0.0
+                    self.data['has_fix'] = int(parts[6]) > 0
+                    self.data['satellites'] = int(parts[7]) if parts[7] else 0
+                    self.data['last_update'] = datetime.now()
+                    
+                    if int(parts[6]) > 0:
+                        self.stats['valid_fixes'] += 1
+                        self.data['last_fix'] = datetime.now()
+                    
+                except (ValueError, IndexError):
+                    return
     
     def get_position(self):
         """Get the current GPS position
@@ -372,7 +324,6 @@ class GPSModule:
         Returns:
             dict: Dictionary containing position and status information
         """
-        # Return a copy of the data so it won't be changed by the thread while in use
         return self.data.copy()
     
     def get_status(self):
@@ -387,11 +338,13 @@ class GPSModule:
             
         status = {
             'running': self.running,
-            'port': self.port, 
+            'port': self.port,
             'sentences_received': self.stats['sentences_received'],
             'valid_fixes': self.stats['valid_fixes'],
             'errors': self.stats['errors'],
-            'runtime_seconds': runtime
+            'runtime_seconds': runtime,
+            'last_successful_read': self.last_successful_read,
+            'connection_attempts': self.connection_attempts
         }
         return status
     
