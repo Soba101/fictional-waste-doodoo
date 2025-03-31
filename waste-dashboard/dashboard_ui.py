@@ -770,9 +770,6 @@ def create_bottom_section_plotly():
 
 def display_detailed_detection_data(selected_date):
     """Fetch and display detection details for a selected date"""
-    st.markdown("---")
-    st.markdown(f"### Historical Waste Detection Data for {selected_date}")
-
     try:
         # First get summary information for this date
         summary_query = """
@@ -884,54 +881,48 @@ def display_detailed_detection_data(selected_date):
                 
                 # Show the details table
                 st.dataframe(df_details, use_container_width=True)
-                
-                # If we have keyframes, show a gallery of sample images
-                if 'keyframe_id' in df_details.columns and df_details['keyframe_id'].notna().any():
-                    st.subheader("Keyframes")
-                    st.info("Click on an image to view full size")
-                    
-                    # Limit to at most 5 keyframes to display
-                    keyframe_ids = df_details['keyframe_id'].dropna().unique()[:5]
-                    
-                    # Create a grid of images
-                    cols = st.columns(min(len(keyframe_ids), 5))
-                    
-                    for i, keyframe_id in enumerate(keyframe_ids):
-                        with cols[i % len(cols)]:
-                            try:
-                                # Query to retrieve the actual image data from the database
-                                keyframe_query = """
-                                SELECT image_data, image_format FROM keyframes 
-                                WHERE keyframe_id = %s
-                                """
-                                
-                                # Execute the query using pd.read_sql which handles parameters differently
-                                df_keyframe = pd.read_sql(keyframe_query, engine, params=(int(keyframe_id),))
-                                
-                                if not df_keyframe.empty and df_keyframe['image_data'].iloc[0] is not None:
-                                    # Get the binary image data and format
-                                    image_data = df_keyframe['image_data'].iloc[0]
-                                    image_format = df_keyframe['image_format'].iloc[0] or 'jpg'
-                                    
-                                    # Convert binary data to image
-                                    from PIL import Image
-                                    import io
-                                    
-                                    # Create an in-memory file-like object
-                                    image_bytes = io.BytesIO(image_data)
-                                    
-                                    # Open the image with PIL
-                                    img = Image.open(image_bytes)
-                                    
-                                    # Display the image in Streamlit
-                                    st.image(img, caption=f"Keyframe {int(keyframe_id)}", use_container_width=True)
-                                else:
-                                    st.warning(f"No image data found for keyframe {int(keyframe_id)}")
-                            except Exception as e:
-                                st.warning(f"Error loading keyframe {int(keyframe_id)}: {e}")
-                                logger.error(f"Keyframe load error: {e}")
             else:
                 st.info("No detailed data available for this date.")
+
+            # Query to get the 5 latest keyframes
+            keyframe_query = """
+            SELECT k.keyframe_id, k.image_data, k.image_format, d.timestamp, d.device_id, d.num_detections
+            FROM keyframes k
+            JOIN detections d ON k.detection_id = d.detection_id
+            ORDER BY d.timestamp DESC
+            LIMIT 5
+            """
+            df_keyframe = pd.read_sql(keyframe_query, engine)
+            
+            if not df_keyframe.empty:
+                st.subheader("Latest Keyframes")
+                st.info("Click on an image to view full size")
+                
+                # Create a grid of images
+                cols = st.columns(min(len(df_keyframe), 5))
+                
+                for i, (_, row) in enumerate(df_keyframe.iterrows()):
+                    with cols[i % len(cols)]:
+                        try:
+                            if row['image_data'] is not None:
+                                # Convert binary data to image
+                                from PIL import Image
+                                import io
+                                image_bytes = io.BytesIO(row['image_data'])
+                                img = Image.open(image_bytes)
+                                
+                                # Format timestamp
+                                timestamp = pd.to_datetime(row['timestamp']).strftime('%H:%M:%S')
+                                
+                                # Display the image with caption
+                                st.image(img, 
+                                       caption=f"{timestamp} - {row['device_id']}\n{row['num_detections']} items", 
+                                       use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Error loading keyframe: {e}")
+                            logger.error(f"Keyframe load error: {e}")
+            else:
+                st.info("No keyframes available yet")
         else:
             st.warning("No detection data found for the selected date.")
             

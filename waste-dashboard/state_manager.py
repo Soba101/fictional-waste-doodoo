@@ -110,7 +110,7 @@ def process_queue_data():
             
             # Add device to devices dict if not exists
             if device_id not in st.session_state.devices:
-                # Use location from data if provided
+                # Use location from data if provided, otherwise use default with random offset
                 lat = data.get('lat', 1.3521 + np.random.uniform(-0.01, 0.01))
                 lon = data.get('lon', 103.8198 + np.random.uniform(-0.01, 0.01))
                 
@@ -129,16 +129,17 @@ def process_queue_data():
                     "last_updated": timestamp
                 }
                 add_connection_log("New device added", f"Location: {lat}, {lon}", device_id)
-                
-                        # Update device location if provided in new data
-            if device_id in st.session_state.devices:
-                # Update GPS coordinates if provided and device has a GPS fix
-                if 'lat' in data and 'lon' in data:
-                    has_fix = data.get('has_gps_fix', False)
-                    if has_fix:  # Only update if GPS has a fix
-                        logger.info(f"Updating GPS for {device_id}: {data['lat']}, {data['lon']}")
-                        st.session_state.devices[device_id]["lat"] = data['lat']
-                        st.session_state.devices[device_id]["lon"] = data['lon']
+            
+            # Update device location if provided in new data
+            if device_id in st.session_state.devices and 'lat' in data and 'lon' in data:
+                has_fix = data.get('has_gps_fix', False)
+                # Always update coordinates, but log the source
+                st.session_state.devices[device_id]["lat"] = data['lat']
+                st.session_state.devices[device_id]["lon"] = data['lon']
+                if has_fix:
+                    logger.info(f"Updated GPS location for {device_id}: {data['lat']}, {data['lon']} (GPS fix)")
+                else:
+                    logger.info(f"Updated location for {device_id}: {data['lat']}, {data['lon']} (default/fallback)")
             
             # *** IMPORTANT FIX: Always update the device IP when receiving data ***
             if 'device_ips' not in st.session_state:
