@@ -1,7 +1,7 @@
 # Database Receiver Requirements
 
 # Database connectivity
-pymysql==1.0.3
+pymysql==1.1.1
 cryptography==41.0.3  # For secure MySQL connections
 
 # Image processing
