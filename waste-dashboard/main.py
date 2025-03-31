@@ -11,25 +11,29 @@ from utils import add_connection_log
 
 # Set up logging
 def setup_logging():
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    # Only set up logging once
+    if 'logger' not in st.session_state:
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, f"dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    logger = logging.getLogger('waste-dashboard')
-
-    logger.info("====== Dashboard Starting ======")
-    logger.info(f"Logging to file: {log_file}")
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+        logger = logging.getLogger('waste-dashboard')
+        logger.info("====== Dashboard Starting ======")
+        logger.info(f"Logging to file: {log_file}")
+        
+        st.session_state.logger = logger
+        st.session_state.log_file = log_file
     
-    return logger, log_file
+    return st.session_state.logger, st.session_state.log_file
 
 def create_dashboard_ui_with_debug(receiver, log_file):
     """Create the dashboard UI with debug mode option"""
@@ -71,16 +75,18 @@ def create_dashboard_ui_with_debug(receiver, log_file):
 
 # Main function to run the dashboard
 def main():
-    # Set up logging
+    # Set up logging (now uses session state)
     logger, log_file = setup_logging()
     
-    # Page configuration
-    st.set_page_config(
-        page_title="Waste Detection Dashboard",
-        page_icon="♻️",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+    # Page configuration (only set once)
+    if 'page_config_set' not in st.session_state:
+        st.set_page_config(
+            page_title="Waste Detection Dashboard",
+            page_icon="♻️",
+            layout="wide",
+            initial_sidebar_state="expanded"
+        )
+        st.session_state.page_config_set = True
     
     # Add custom CSS styling
     apply_custom_css()
@@ -98,9 +104,9 @@ def main():
     receiver = st.session_state.data_receiver
     
     # Process all queues - do this in the main thread
-    process_queues()
+    process_queues(receiver=receiver)  # Pass receiver as a keyword argument
     
-    # Create the dashboard UI with debug option
+    # Create the dashboard UI
     create_dashboard_ui_with_debug(receiver, log_file)
     
     # Register cleanup

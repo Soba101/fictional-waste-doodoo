@@ -41,35 +41,40 @@ The Waste Detection System consists of three primary components:
 waste-detection-system/
 ├── README.md                 # This file - system overview
 ├── docs/                     # Additional documentation
-│   ├── system-architecture.svg  # System architecture diagram
-│   └── Raspberry-Pi-5-Pinout.jpg # Raspberry Pi GPIO pinout diagram
-├── HARDWARE.md               # Hardware setup and wiring guide
+│   ├── system-architecture.png  # System architecture diagram
+│   ├── Raspberry-Pi-5-Pinout.jpg # Raspberry Pi GPIO pinout diagram
+│   ├── F1_curve.png         # F1 score visualization
+│   ├── P_curve.png          # Precision curve visualization
+│   ├── PR_curve.png         # Precision-Recall curve
+│   ├── R_curve.png          # Recall curve visualization
+│   └── results.png          # Overall results visualization
 ├── new-pi/                   # Edge device code for Raspberry Pi
-│   ├── pi-README.md          # Setup guide for Raspberry Pi devices
-│   ├── config.py             # Device configuration
-│   ├── main.py               # Main application entry point
-│   ├── requirements.txt      # Pi-specific dependencies
-│   ├── modules/              # Modular components
-│   │   ├── camera_module.py  # Camera interface
+│   ├── README.md            # Setup guide for Raspberry Pi devices
+│   ├── HARDWARE.md          # Hardware setup and wiring guide
+│   ├── config.py            # Device configuration
+│   ├── main.py              # Main application entry point
+│   ├── requirements.txt     # Pi-specific dependencies
+│   ├── modules/             # Modular components
+│   │   ├── camera_module.py # Camera interface
 │   │   ├── detection_module.py # Waste detection logic
-│   │   ├── communication.py  # Network communication
-│   │   ├── web_server.py     # Web server for video streaming
-│   │   ├── gps_module.py     # GPS module interface
+│   │   ├── communication.py # Network communication
+│   │   ├── web_server.py    # Web server for video streaming
+│   │   ├── gps_module.py    # GPS module interface
 │   │   └── gas_sensor_module.py # Gas sensor interface
-│   └── logs/                 # Log directory for Pi devices
-├── waste-dashboard/          # Dashboard application
-│   ├── dashboard-README.md   # Dashboard setup and usage guide
-│   ├── requirements.txt      # Dashboard dependencies
-│   ├── main.py               # Dashboard entry point
-│   ├── dashboard_ui.py       # Streamlit UI components
-│   ├── data_receiver.py      # Socket server for receiving data
-│   ├── state_manager.py      # Manages application state
-│   └── logs/                 # Dashboard log directory
-└── waste-db/                 # Database component
-    ├── db-README.md          # Database setup guide
-    ├── requirements.txt      # Database dependencies
+│   └── logs/                # Log directory for Pi devices
+├── waste-dashboard/         # Dashboard application
+│   ├── README.md           # Dashboard setup and usage guide
+│   ├── requirements.txt    # Dashboard dependencies
+│   ├── main.py            # Dashboard entry point
+│   ├── dashboard_ui.py    # Streamlit UI components
+│   ├── data_receiver.py   # Socket server for receiving data
+│   ├── state_manager.py   # Manages application state
+│   └── logs/              # Dashboard log directory
+└── waste-db/              # Database component
+    ├── README.md         # Database setup guide
+    ├── requirements.txt  # Database dependencies
     ├── modified-db-receiver.py # Database receiver script
-    └── logs/                 # Database log directory
+    └── logs/            # Database log directory
 ```
 
 ## Quick Start
@@ -79,9 +84,9 @@ waste-detection-system/
 For detailed instructions on setting up each component, see the respective README files:
 
 1. **Hardware Setup**: [HARDWARE.md](/new-pi/HARDWARE.md) - Detailed wiring and hardware connection guide
-2. **Edge Devices (Raspberry Pi)**: [pi-README.md](new-pi/README.md)
-3. **Dashboard**: [dashboard-README.md](waste-dashboard/README.md)
-4. **Database**: [db-README.md](waste-db/README.md)
+2. **Edge Devices (Raspberry Pi)**: [README.md](new-pi/README.md)
+3. **Dashboard**: [README.md](waste-dashboard/README.md)
+4. **Database**: [README.md](waste-db/README.md)
 
 ### Install Required Dependencies
 

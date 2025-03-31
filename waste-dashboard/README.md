@@ -52,9 +52,7 @@ Ensure you have MariaDB installed and running. See the [Database Setup Guide](..
 
 ## Configuration
 
-The dashboard configuration can be found in several files:
-
-### Dashboard UI Configuration (`dashboard_ui.py`)
+The dashboard configuration is handled in the database connection code. Update the following values in your database connection code:
 
 ```python
 # Database connection details
@@ -64,7 +62,7 @@ DB_PASSWORD = "password"  # Change in production!
 DB_NAME = "waste_detection"
 ```
 
-### Data Receiver Configuration (`data_receiver.py`)
+### Network Configuration (`data_receiver.py`)
 
 ```python
 # Network configuration
@@ -82,7 +80,10 @@ Update these values to match your network and database configuration.
 streamlit run main.py
 ```
 
-The dashboard will be available at `http://localhost:8501` by default.
+The dashboard will be available at `http://localhost:8501` by default and includes:
+- Dark theme for better visibility
+- Custom CSS styling for improved UI
+- Responsive layout optimized for monitoring
 
 ### Debug Mode
 
@@ -165,16 +166,22 @@ The dashboard consists of several modular components:
 
 ## Dashboard Customization
 
+### UI Styling
+
+The dashboard includes:
+1. Dark theme for better visibility
+2. Custom CSS styling for:
+   - Container padding adjustments
+   - Metric box styling
+   - Status indicators
+   - Layout optimization
+
 ### Map Configuration
 
 The default map is centered on Singapore. To change this location:
 
 1. Locate the `create_map` function in `dashboard_ui.py`
 2. Change the coordinates in `m = folium.Map(location=[1.3521, 103.8198], zoom_start=12)`
-
-### Interface Styling
-
-Custom CSS styling can be modified in the `apply_custom_css` function in `main.py`.
 
 ### Chart Appearance
 
@@ -277,3 +284,28 @@ Potential improvements for the dashboard:
 4. Advanced analytics and prediction features
 5. Integration with waste management systems
 6. Report generation and export functionality
+
+### Python Package Requirements
+
+Core dependencies:
+- streamlit==1.25.0
+- pandas==2.0.3
+- numpy==1.24.3
+
+Data visualization:
+- altair==5.1.2
+- plotly==5.18.0
+- plotly-express==0.4.1
+- matplotlib==3.8.0
+- streamlit-plotly-events==0.0.6
+
+Mapping:
+- folium==0.14.0
+- streamlit-folium==0.13.0
+
+Database:
+- pymysql==1.0.3
+- sqlalchemy==2.0.23
+- cryptography==41.0.3
+
+For a complete list of dependencies, see `requirements.txt`.
