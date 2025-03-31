@@ -1,22 +1,25 @@
 # Raspberry Pi Detection Requirements
 
 # Computer vision
-opencv-python==4.8.0
+opencv-python
 numpy==1.24.3
 
 # Web server
-flask==2.3.3
+flask
 
 # Network and API
-requests==2.31.0
+requests
 
 # Raspberry Pi hardware
-gpiozero==2.0.0
-lgpio==0.1.0  # Required for gpiozero on Pi 5
-pyserial==3.5  # For GPS module serial connection
+gpiozero
+lgpio # Required for gpiozero on Pi 5
+pyserial  # For GPS module serial connection
 
 # GPS data parsing
-pynmea2==1.19.0  # For GPS NMEA parsing
+pynmea2 # For GPS NMEA parsing
+
+# TensorFlow Lite
+tflite-runtime # For YOLO model inference
 
 # Standard library modules are included by default:
 # - logging

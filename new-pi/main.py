@@ -58,7 +58,7 @@ def handle_new_frame(frame):
         frame: The new camera frame
     """
     # Run detection on the frame
-    predictions = detection_module.detect_waste(frame)
+    predictions = detection_module.detect(frame)
     
     # If there are predictions, they will be handled by the detection callback
     return frame

@@ -10,7 +10,7 @@ GAS_ENABLED = True    # Set to False to disable gas sensor
 
 # Hardware configuration
 GPS_PORT = '/dev/ttyAMA0'  # Port for GPS module
-GAS_PIN = 17               # GPIO pin for MQ-2 DO (Digital Output)
+GAS_PIN = 23               # GPIO pin for MQ-2 DO (Digital Output)
 
 # Network configuration
 DASHBOARD_IP = "192.168.18.107"  # Dashboard server IP
@@ -32,7 +32,7 @@ LOG_FILE = os.path.join(LOG_DIR, f"pi_{datetime.now().strftime('%Y%m%d_%H%M%S')}
 # Camera configuration
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
-CAMERA_FPS = 2  # Frames per second for waste detection
+CAMERA_FPS = 15  # Frames per second for waste detection
 
 # Temporary directory for camera captures
 TEMP_DIR = "/tmp/pi_captures"
