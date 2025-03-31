@@ -51,7 +51,7 @@ def initialize_session_state(logger):
             "last_connection_time": {}
         }
 
-def process_queues():
+def process_queues(receiver=None):
     """Process all queues for thread communication - called from main thread"""
     # Process log queue first
     try:

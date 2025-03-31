@@ -117,14 +117,14 @@ def create_sidebar(receiver):
     st.sidebar.title("Dashboard Controls")
     st.sidebar.markdown("Use these controls to manage the dashboard.")
     
-    # Network configuration and discovery
-    st.sidebar.subheader("Network Configuration")
+    # Network configuration section with improved styling
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌐 Network Configuration")
     
     # Show the machine's IP addresses that Pi should connect to
     try:
         hostname = socket.gethostname()
         local_ip = socket.gethostbyname(hostname)
-        st.sidebar.write(f"Dashboard IP: **{local_ip}**")
         
         # Get all IPs for this machine
         all_ips = []
@@ -132,33 +132,108 @@ def create_sidebar(receiver):
             ip = iface_addr[4][0]
             if ip not in all_ips and not ip.startswith('127.') and ':' not in ip:  # Skip loopback and IPv6
                 all_ips.append(ip)
-                
+        
+        # Display IPs in a more organized way
+        st.sidebar.markdown("""
+        <div style='background-color: #2b2b2b; padding: 10px; border-radius: 5px;'>
+            <p style='margin: 0; color: #9e9e9e;'>Dashboard IP:</p>
+            <p style='margin: 0; font-size: 1.2em; font-weight: bold;'>{}</p>
+        </div>
+        """.format(local_ip), unsafe_allow_html=True)
+        
         if len(all_ips) > 1:
-            st.sidebar.write("Alternative IPs:")
-            for ip in all_ips:
-                if ip != local_ip:
-                    st.sidebar.write(f"- **{ip}**")
+            alt_ips = [ip for ip in all_ips if ip != local_ip]
+            if alt_ips:
+                st.sidebar.markdown("""
+                <div style='background-color: #2b2b2b; padding: 10px; border-radius: 5px; margin-top: 10px;'>
+                    <p style='margin: 0; color: #9e9e9e;'>Alternative IPs:</p>
+                    <p style='margin: 0; font-size: 1.1em;'>{}</p>
+                </div>
+                """.format("<br>".join(alt_ips)), unsafe_allow_html=True)
                     
         logger.info(f"Dashboard IPs: {', '.join(all_ips)}")
     except Exception as e:
         st.sidebar.error(f"Could not determine local IP: {e}")
         logger.error(f"Error getting local IP: {e}")
     
-    # Display receiver status from the actual DataReceiver object
+    # Database Status Section
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("💾 Database Status")
+    
+    try:
+        # Test database connection
+        test_query = "SELECT COUNT(*) as count FROM detections"
+        result = pd.read_sql(test_query, engine)
+        total_detections = result.iloc[0]['count']
+        
+        # Get latest detection timestamp
+        latest_query = "SELECT MAX(timestamp) as latest FROM detections"
+        latest_result = pd.read_sql(latest_query, engine)
+        latest_detection = latest_result.iloc[0]['latest']
+        
+        # Format the timestamp
+        if latest_detection:
+            latest_time = pd.to_datetime(latest_detection).strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            latest_time = "No detections"
+        
+        # Display database status with styling
+        st.sidebar.markdown(f"""
+        <div style='background-color: #2b2b2b; padding: 15px; border-radius: 5px; margin-bottom: 15px;'>
+            <div style='display: flex; align-items: center; margin-bottom: 10px;'>
+                <div style='width: 12px; height: 12px; border-radius: 50%; background-color: #4CAF50; margin-right: 8px;'></div>
+                <span style='font-size: 1.1em; font-weight: bold;'>Connected</span>
+            </div>
+            <p style='margin: 5px 0;'>📊 Total Records: {total_detections:,}</p>
+            <p style='margin: 5px 0;'>🕒 Latest Detection: {latest_time}</p>
+            <p style='margin: 5px 0;'>🔌 Host: {DB_HOST}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception as e:
+        # Display error status
+        st.sidebar.markdown(f"""
+        <div style='background-color: #2b2b2b; padding: 15px; border-radius: 5px; margin-bottom: 15px;'>
+            <div style='display: flex; align-items: center; margin-bottom: 10px;'>
+                <div style='width: 12px; height: 12px; border-radius: 50%; background-color: #F44336; margin-right: 8px;'></div>
+                <span style='font-size: 1.1em; font-weight: bold;'>Disconnected</span>
+            </div>
+            <p style='margin: 5px 0;'>❌ Connection Error</p>
+            <p style='margin: 5px 0;'>🔌 Host: {DB_HOST}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        logger.error(f"Database connection error: {e}")
+    
+    # Edge Devices Status Section
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📱 Edge Devices Status")
+    
+    # Display receiver status with better organization
     receiver_status = st.session_state.receiver_status
     active_devices_count = len(receiver_status.get("active_devices", set()))
-    connection_status = "🟢 Connected" if active_devices_count > 0 else "🔴 Disconnected"
-    st.sidebar.write(f"Status: {connection_status}")
-    st.sidebar.write(f"Details: {receiver_status['connection_status']}")
-    st.sidebar.write(f"Connection attempts: {receiver_status['connection_attempts']}")
-    st.sidebar.write(f"Successful: {receiver_status['successful_connections']}")
-    st.sidebar.write(f"Failed: {receiver_status['failed_connections']}")
-    st.sidebar.write(f"Active devices: {active_devices_count}")
     
-    # Control buttons
+    # Status indicator with color
+    status_color = "#4CAF50" if active_devices_count > 0 else "#F44336"
+    connection_status = "Connected" if active_devices_count > 0 else "Disconnected"
+    
+    st.sidebar.markdown(f"""
+    <div style='background-color: #2b2b2b; padding: 15px; border-radius: 5px; margin-bottom: 15px;'>
+        <div style='display: flex; align-items: center; margin-bottom: 10px;'>
+            <div style='width: 12px; height: 12px; border-radius: 50%; background-color: {status_color}; margin-right: 8px;'></div>
+            <span style='font-size: 1.1em; font-weight: bold;'>{connection_status}</span>
+        </div>
+        <p style='margin: 5px 0;'>📱 Active devices: {active_devices_count}</p>
+        <p style='margin: 5px 0;'>🔄 Connection attempts: {receiver_status['connection_attempts']}</p>
+        <p style='margin: 5px 0;'>✅ Successful: {receiver_status['successful_connections']}</p>
+        <p style='margin: 5px 0;'>❌ Failed: {receiver_status['failed_connections']}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Control buttons with improved styling
+    st.sidebar.markdown("### 🎮 Controls")
     col1, col2 = st.sidebar.columns(2)
+    
     with col1:
-        if st.button("Restart Receiver"):
+        if st.button("🔄 Restart", help="Restart the receiver service"):
             receiver.stop()
             time.sleep(1)
             receiver.start()
@@ -166,29 +241,13 @@ def create_sidebar(receiver):
             add_connection_log("Receiver restarted")
     
     with col2:
-        if st.button("Discover Devices"):
+        if st.button("🔍 Discover", help="Search for new devices"):
             discover_devices()
             st.sidebar.success("Discovery started!")
     
-    # Live feed toggle
-    st.session_state.show_live_feed = st.sidebar.checkbox("Show Live Feed", 
-                                                        value=st.session_state.get('show_live_feed', False))
-    
-    # Device selection for live feed
-    if st.session_state.device_ips and st.session_state.show_live_feed:
-        device_options = list(st.session_state.device_ips.keys())
-        if device_options:
-            selected_device = st.sidebar.selectbox(
-                "Select Device", 
-                device_options,
-                index=0
-            )
-            if selected_device:
-                st.session_state.show_device_feed = selected_device
-    
-    # Connection log display
-    st.session_state.show_connection_log = st.sidebar.checkbox("Show Connection Log", 
-                                                              value=st.session_state.get('show_connection_log', False))
+    # Add version info at the bottom
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<div style='text-align: center; color: #666;'>v1.0.0</div>", unsafe_allow_html=True)
 
 def get_user_location():
     """Retrieve user location from query params"""
@@ -579,7 +638,7 @@ def create_bottom_section_plotly():
             "Date Range",
             options=range(len(date_ranges)),
             format_func=lambda i: date_ranges[i]["label"],
-            index=3  # Changed from 2 to 3 to default to "Year to date"
+            index=0  
         )
         days_to_display = date_ranges[selected_range]["days"]
     
