@@ -53,7 +53,8 @@ def verify_database_connection():
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME,
-            connect_timeout=5  # Add timeout
+            connect_timeout=5,  # Add timeout
+            ssl=False  # Disable SSL
         )
         connection.ping()  # Test if connection is alive
         connection.close()
@@ -67,6 +68,7 @@ def verify_database_connection():
 # Create SQLAlchemy engine with connection pooling and better logging
 engine = create_engine(
     f"mariadb+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}",
+    connect_args={'ssl': False},  # Disable SSL using connect_args instead
     pool_size=config.DATABASE_POOL_SIZE,
     max_overflow=config.DATABASE_MAX_OVERFLOW,
     pool_timeout=config.DATABASE_POOL_TIMEOUT,

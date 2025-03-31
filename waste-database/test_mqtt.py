@@ -9,7 +9,6 @@ from datetime import datetime
 import random
 import logging
 import requests
-import config
 
 # Set up logging
 logging.basicConfig(
@@ -18,9 +17,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger('mqtt-test')
 
+# Configuration
+MQTT_BROKER = "192.168.18.113"  # Pi400 IP address
+MQTT_PORT = 1883
+MQTT_KEEPALIVE = 60
+MQTT_QOS = 1
+MQTT_TOPIC_PREFIX = "devices"
+
+# Database configuration
+DATABASE_HOST = "192.168.18.113"  # Pi400 IP address
+DATABASE_PORT = 5002
+
 # Simulated device ID
 DEVICE_ID = "test_device_001"
-API_BASE_URL = f"http://localhost:{config.DATABASE_PORT}"
+API_BASE_URL = f"http://{DATABASE_HOST}:{DATABASE_PORT}"
 
 def verify_database_connection():
     """Verify if the database server is running and accessible."""
@@ -47,6 +57,15 @@ def on_publish(client, userdata, mid):
     """Callback when message is published."""
     logger.info(f"Message {mid} published")
 
+def on_message(client, userdata, msg):
+    """Callback when message is received."""
+    logger.info(f"Message received on topic {msg.topic}")
+    try:
+        data = json.loads(msg.payload)
+        logger.info(f"Message content: {json.dumps(data, indent=2)}")
+    except Exception as e:
+        logger.error(f"Error parsing message: {e}")
+
 def generate_test_data():
     """Generate simulated detection data."""
     return {
@@ -65,8 +84,8 @@ def generate_test_data():
             }
             for _ in range(random.randint(1, 3))
         ],
-        "lat": round(random.uniform(51.5074, 51.5075), 6),
-        "lon": round(random.uniform(-0.1278, -0.1277), 6),
+        "lat": round(random.uniform(1.3521, 1.3522), 6),  # Singapore coordinates
+        "lon": round(random.uniform(103.8198, 103.8199), 6),
         "has_gps_fix": True,
         "satellites": random.randint(4, 8),
         "altitude": round(random.uniform(0, 100), 2),
@@ -107,21 +126,27 @@ def main():
     try:
         # First verify database server is running
         if not verify_database_connection():
-            logger.error("Please start the database server first using 'python start_db.py'")
+            logger.error("Please ensure the database server is running on the Pi400")
             return
 
         # Create MQTT client
         client = mqtt.Client(client_id=f"test_device_{DEVICE_ID}")
         client.on_connect = on_connect
         client.on_publish = on_publish
+        client.on_message = on_message  # Add message callback
 
         # Connect to MQTT broker
-        logger.info(f"Connecting to MQTT broker at {config.MQTT_BROKER}:{config.MQTT_PORT}")
-        client.connect(config.MQTT_BROKER, config.MQTT_PORT, config.MQTT_KEEPALIVE)
+        logger.info(f"Connecting to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}")
+        client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
         client.loop_start()
 
         # Wait for connection
         time.sleep(2)
+
+        # Subscribe to our own messages for verification
+        topic = f"{MQTT_TOPIC_PREFIX}/{DEVICE_ID}/detections"
+        client.subscribe(topic, qos=MQTT_QOS)
+        logger.info(f"Subscribed to topic: {topic}")
 
         # Send test messages
         for i in range(5):  # Send 5 test messages
@@ -129,11 +154,11 @@ def main():
             data = generate_test_data()
             
             # Create topic
-            topic = f"{config.MQTT_TOPIC_PREFIX}/{DEVICE_ID}/detections"
+            topic = f"{MQTT_TOPIC_PREFIX}/{DEVICE_ID}/detections"
             
             # Publish message
             logger.info(f"Sending test message {i+1} to topic {topic}")
-            client.publish(topic, json.dumps(data), qos=config.MQTT_QOS)
+            client.publish(topic, json.dumps(data), qos=MQTT_QOS)
             
             # Wait between messages
             time.sleep(2)
