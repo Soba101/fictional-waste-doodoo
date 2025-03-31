@@ -1,7 +1,7 @@
 # Dashboard Requirements
 
 # Core dependencies
-streamlit==1.25.0
+streamlit>=1.37.0
 pandas==2.0.3
 numpy==1.24.3
 
@@ -17,15 +17,15 @@ folium==0.14.0
 streamlit-folium==0.13.0
 
 # Image processing
-pillow==10.0.0
+pillow>=10.3.0
 
 # Network and API
-requests==2.31.0
+requests>=2.32.0
 
 # Database
-pymysql==1.0.3
+pymysql==1.1.1
 sqlalchemy==2.0.23
-cryptography==41.0.3  # For secure database connections
+cryptography>=43.0.1 # For secure database connections
 
 # Date and time
 pytz==2023.3
