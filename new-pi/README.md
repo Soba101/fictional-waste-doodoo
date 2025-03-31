@@ -6,7 +6,7 @@ This document provides setup and configuration instructions for the Raspberry Pi
 
 The Raspberry Pi edge device serves as the detection and sensing component of the waste detection system, with the following capabilities:
 
-1. Waste detection using computer vision
+1. Waste detection using YOLO model with GPU acceleration
 2. Live video streaming to the dashboard
 3. GPS location tracking (optional)
 4. Gas detection with MQ-2 sensor (optional)
@@ -27,20 +27,21 @@ The Raspberry Pi edge device serves as the detection and sensing component of th
 - Raspberry Pi OS (Bullseye or newer, 64-bit recommended)
 - Python 3.7+
 - Required Python packages (see `requirements.txt`)
+- System dependencies (installed via `setup.sh`)
 
 ## Installation
 
 ### 1. Set Up Raspberry Pi OS
 
 1. Install Raspberry Pi OS using the Raspberry Pi Imager
-2. Enable SSH and camera interface:
+2. Enable required interfaces:
    ```bash
    sudo raspi-config
    ```
    Navigate to "Interface Options" and enable:
    - Camera
    - SSH
-   - I2C (if using additional sensors)
+   - I2C (if using gas sensor)
    - Serial (for GPS module)
 
 3. Update the system:
@@ -49,23 +50,23 @@ The Raspberry Pi edge device serves as the detection and sensing component of th
    sudo apt upgrade -y
    ```
 
-### 2. Install Required Dependencies
+### 2. Install Software Dependencies
 
-```bash
-# Install system dependencies
-sudo apt install -y python3-opencv python3-picamera2 python3-gpiozero python3-lgpio python3-serial
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/waste-detection-system.git
+   cd waste-detection-system/new-pi
+   ```
 
-# Clone the repository
-git clone https://github.com/your-username/waste-detection-system.git
-cd waste-detection-system/new-pi
+2. Make the setup script executable and run it:
+   ```bash
+   chmod +x setup.sh
+   ./setup.sh
+   ```
 
-# Create virtual environment (optional but recommended)
-python3 -m venv venv
-source venv/bin/activate
-
-# Install Python dependencies
-pip install -r requirements.txt
-```
+3. Download the YOLO model:
+   - Download the quantized YOLO model from [YOUR_MODEL_DOWNLOAD_URL]
+   - Place it in the `models` directory as `best_integer_quant.tflite`
 
 ### 3. Configure the Device
 
@@ -84,6 +85,11 @@ DATABASE_PORT = 5002              # Database server port
 # Enable or disable hardware components
 GPS_ENABLED = True    # Set to False if no GPS module
 GAS_ENABLED = True    # Set to False if no gas sensor
+
+# Camera settings
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
+CAMERA_FPS = 2  # Frames per second for waste detection
 ```
 
 ## Running the Waste Detection System
@@ -98,7 +104,7 @@ python3 main.py
 
 The application will:
 1. Initialize all hardware components
-2. Start the detection algorithm
+2. Start the YOLO detection algorithm with GPU acceleration
 3. Begin sending data to the dashboard and database
 4. Start a web server for live video streaming on port 8000
 
@@ -144,14 +150,14 @@ To make the application start automatically when the Raspberry Pi boots:
 The edge device consists of the following modules:
 
 1. **Camera Module** (`camera_module.py`)
-   - Handles camera initialization and frame capture
-   - Provides frames to the detection module
-   - Falls back to a test pattern if camera fails
+   - Uses libcamera-vid for efficient video capture
+   - Provides MJPEG streaming
+   - Falls back to dummy frames if camera fails
 
 2. **Detection Module** (`detection_module.py`)
-   - Implements waste detection algorithm
-   - Classifies detected items (plastic, paper, glass)
-   - Provides confidence scores and bounding boxes
+   - Uses YOLO model with GPU acceleration
+   - Optimized for Raspberry Pi 5
+   - Falls back to CPU if GPU unavailable
 
 3. **Communication Module** (`communication.py`)
    - Sends detection data to the dashboard
@@ -213,8 +219,9 @@ If you encounter issues with the software components, check these common problem
 
 ### Camera and Detection Issues
 1. Verify camera is working: `libcamera-still -o test.jpg`
-2. Check detection module configuration
-3. Test detection on a sample image
+2. Check GPU acceleration: `vcgencmd get_mem gpu`
+3. Verify model file exists: `ls -l models/best_integer_quant.tflite`
+4. Test detection on a sample image
 
 **For hardware-specific troubleshooting**, see [HARDWARE.md](../HARDWARE.md).
 
@@ -223,12 +230,8 @@ If you encounter issues with the software components, check these common problem
 For reliable 24/7 operation:
 1. Use a stable power supply (minimum 3A)
 2. Consider a UPS for uninterrupted operation
-3. Enable watchdog timer for automatic recovery:
-   ```bash
-   sudo nano /boot/config.txt
-   # Add line: dtparam=watchdog=on
-   sudo reboot
-   ```
+3. Monitor system temperature: `vcgencmd measure_temp`
+4. Check GPU memory: `vcgencmd get_mem gpu`
 
 ## Security Considerations
 
