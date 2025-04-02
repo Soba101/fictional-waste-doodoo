@@ -1,52 +1,81 @@
-# Intelligent waste segregation system
-This project demonstrates waste detection using a YOLOv8 (You Only Look Once) object detection model. It identifies recyclable, non-recyclable, and hazardous waste items in a webcam stream.
+# YOLOv8 Waste Detection Model
 
-Our datasets used to train:
-https://universe.roboflow.com/ai-project-i3wje/waste-detection-vqkjo/model/3
+This directory contains the YOLOv8-based waste detection model implementation for this project. The model is designed to detect and classify different types of waste materials, particularly focusing on recyclable items.
 
-Colab:
-https://colab.research.google.com/drive/1dHv5QUuz2NkkgzeKBoO4DLAhLg9mOrzv?usp=sharing
+## Overview
 
-Live:
-https://intelligent-waste-segregation-system.streamlit.app
+The waste detection system uses YOLOv8 (nano model) for real-time object detection and classification. It's optimized for edge deployment and can detect various types of recyclable materials including plastic bottles, cans, paper products, and more.
 
+## Components
 
-## Setup
+- `app.py`: Streamlit web application for real-time waste detection
+- `train.py`: Training script for the YOLOv8 model
+- `helper.py`: Utility functions for image processing and model operations
+- `settings.py`: Configuration settings for the model
+- `yolov8n.pt`: Pre-trained YOLOv8 nano model
+- `weights/`: Directory containing trained model weights
+- `pi5_optimized/`: Optimized version for Raspberry Pi 5 deployment
 
-**Clone the Repository:**
-```bash
-git clone https://github.com/boss4848/waste-detection.git
-cd waste-detection
-```
-**Install Dependencies:**
+## Dependencies
+
+The project requires the following main dependencies:
+- streamlit==1.26.0
+- opencv-python-headless==4.8.1.78
+- torch==2.0.1
+- torchvision==0.15.2
+- ultralytics==8.0.173
+- urllib3==1.26.6
+- onnx==1.15.0
+
+## Integration with Main Project
+
+This model is integrated with the main Fictional Waste Doodoo project through the following components:
+
+1. **Web Interface**: The Streamlit app (`app.py`) provides a user-friendly interface for waste detection
+2. **Model Integration**: The trained model can be used by the main application for waste classification
+3. **API Endpoints**: The model's predictions can be accessed through the main project's API
+
+## Usage
+
+1. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
-**Run the Application**
+
+2. Run the Streamlit app:
 ```bash
 streamlit run app.py
 ```
-Open your web browser and navigate to the provided URL (usually http://localhost:8501). You will see the Waste Detection app.
 
-## Project Structure
+3. For training the model on custom data:
+```bash
+python train.py
+```
 
-- `app.py`: Main application file containing Streamlit code.
-- `helper.py`: Helper functions for waste detection using the YOLO model.
-- `settings.py`: Configuration settings, including the path to the YOLO model and waste types.
-- `train.py`: To train the model
+## Model Training
 
-## Classifying Waste Items
+The model is trained on the TACO dataset with the following configurations:
+- Epochs: 200
+- Image size: 640x640
+- Batch size: 8
+- Optimizer: AdamW
+- Learning rate: 0.0005
+- Various augmentations including mosaic, mixup, and copy-paste
 
-- **RECYCLABLE**=['cardboard_box','can','plastic_bottle_cap','plastic_bottle','reuseable_paper']
-- **NON_RECYCLABLE**=['plastic_bag','scrap_paper','stick','plastic_cup','snack_bag','plastic_box','straw','plastic_cup_lid','scrap_plastic','cardboard_bowl','plastic_cultery']
-- **HAZARDOUS**=['battery','chemical_spray_can','chemical_plastic_bottle','chemical_plastic_gallon','light_bulb','paint_bucket']
+## Performance Optimization
 
-## Screenshots
+The model is optimized for:
+- Edge deployment (Raspberry Pi 5)
+- Real-time inference
+- Resource-constrained environments
 
-![screenshot2](screenshot2.png)
+## Related Components
 
-## References
+- [Main Project](../README.md)
+- [Frontend](../frontend/README.md)
+- [Backend](../backend/README.md)
+- [Database](../database/README.md)
 
-- [Streamlit Documentation](https://docs.streamlit.io/)
-- [YOLO Documentation](https://github.com/ultralytics/yolov5)
+## License
 
+This component is part of this project. See the main project's LICENSE file for details. 

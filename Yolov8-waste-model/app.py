@@ -16,7 +16,8 @@ inference_time_placeholder = st.sidebar.empty()
 
 st.title("Intelligent waste segregation system")
 st.write(
-    "Start detecting objects in the webcam stream automatically when the app runs."
+    "Start detecting objects in the webcam stream by clicking the button below. "
+    "To stop the detection, click stop button in the top right corner of the webcam stream."
 )
 
 # ==== CLASS DEFINITIONS ====
@@ -101,39 +102,22 @@ nms_threshold = st.sidebar.slider("NMS Threshold", 0.0, 1.0, 0.45, 0.05)
 use_gpu = st.sidebar.checkbox("Use GPU (if available)", value=True)
 
 # ==== LOAD MODEL ====
-model = None
 try:
-    # Use a relative path and check if file exists
-    model_path = "/Users/don/Downloads/Yolov8-TACO-model-itriedbutitdidntwork/pi5_optimized/waste_detection9/weights/best_saved_model/best_integer_quant.tflite"
-    
-    if Path(model_path).exists():
-        model = helper.load_model(model_path)
-        st.success(f"Model loaded successfully from {model_path}!")
-    else:
-        st.error(f"Model file not found at: {model_path}")
-        # Try to find TFLite files in the project directory
-        tflite_files = list(Path("/Users/don/Downloads/Yolov8-TACO-model 3").rglob("*.tflite"))
-        if tflite_files:
-            st.info(f"Found {len(tflite_files)} TFLite files in the project directory:")
-            for file in tflite_files:
-                st.code(str(file))
+    model = helper.load_model("pi5_optimized/waste_detection9/weights/best.pt")
+    st.success("Model loaded successfully!")
 except Exception as ex:
-    st.error(f"Unable to load model. Error: {str(ex)}")
-    st.error(ex)
+    st.error(f"Error loading model: {ex}")
+    st.stop()
 
 # ==== START DETECTION ====
-# Remove the button and directly start the webcam
-if model is not None:
-    helper.play_webcam(model)
-else:
-    st.error("Cannot start webcam detection because model failed to load. Please check the model path and try again.")
+helper.play_webcam(model)
 
 # Add system information
 st.sidebar.markdown("---")
 st.sidebar.subheader("ℹ️ System Information")
 st.sidebar.markdown("""
 - Model: YOLOv8n (Optimized for Pi 5)
-- Input Size: 640x640
+- Input Size: 416x416
 - Quantization: INT8
 - Device: Raspberry Pi 5
 """)

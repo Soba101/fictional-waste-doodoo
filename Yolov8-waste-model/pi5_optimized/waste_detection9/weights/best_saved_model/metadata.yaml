@@ -1,7 +1,7 @@
 description: Ultralytics best model trained on C:\Users\donov\anaconda3\envs\waste-model\Lib\site-packages\ultralytics\cfg\datasets\coco8.yaml
 author: Ultralytics
 license: AGPL-3.0 https://ultralytics.com/license
-date: '2025-03-30T19:20:27.098579'
+date: '2025-03-30T18:40:58.129656'
 version: 8.0.173
 stride: 32
 task: detect
