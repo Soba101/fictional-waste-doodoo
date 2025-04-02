@@ -123,7 +123,7 @@ class WebServerModule:
                     <p>Successful Connections: {{ successful_connections }}</p>
                     <p>Failed Connections: {{ failed_connections }}</p>
                     <p>Camera: Raspberry Pi Camera Module</p>
-                    <p>Detection Method: Simple Color Detection</p>
+                    <p>Detection Method: TFlite Object Detection Model</p>
                     <p>GPS Status: {{ gps_status }}</p>
                     <p>Gas Sensor Status: 
                         <span class="{{ 'gas-alert' if gas_status == 'DETECTED!' else 'gas-normal' }}">

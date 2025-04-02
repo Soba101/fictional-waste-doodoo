@@ -374,47 +374,58 @@ def create_middle_column(user_location):
         map_data = st_folium(cached_map, width=700, height=500)
         
         # Handle map click to select device
-        if map_data["last_object_clicked"] is not None:
+        if map_data["last_object_clicked"] is not None and "last_clicked_coords" not in st.session_state:
             clicked_lat = map_data["last_object_clicked"].get("lat")
             clicked_lng = map_data["last_object_clicked"].get("lng")
             
             if clicked_lat and clicked_lng:
-                # Find device near clicked coordinates
-                selected_device = None
-                for device_id, device_data in st.session_state.devices.items():
-                    # Use small threshold for coordinate matching
-                    if (abs(device_data["lat"] - clicked_lat) < 0.01 and 
-                        abs(device_data["lon"] - clicked_lng) < 0.01):
-                        selected_device = device_data
-                        break
+                st.session_state.last_clicked_coords = (clicked_lat, clicked_lng)
                 
-                if selected_device:
-                    st.write(f"**Device:** {selected_device['id']}")
-                    
-                    # Check last activity time
-                    try:
-                        last_updated = selected_device['last_updated']
-                        if isinstance(last_updated, str):
-                            last_updated = datetime.fromisoformat(last_updated)
-                        time_diff = datetime.now() - last_updated
-                        status = "🟢 Active" if time_diff < timedelta(minutes=5) else "🟠 Inactive"
-                        st.write(f"**Status:** {status} (Last seen: {last_updated.strftime('%H:%M:%S')})")
-                    except:
-                        st.write("**Status:** Unknown")
-                    
-                    st.write(f"**Total Detections:** {selected_device['detections']}")
-                    st.write(f"**Gas Alerts:** {selected_device.get('gas_alerts', 0)}")
-                    
-                    # Device IP
-                    device_id = selected_device['id']
-                    device_ip = st.session_state.device_ips.get(device_id, "Unknown")
-                    st.write(f"**IP Address:** {device_ip}")
-                    
-                    # Option to view the device's live feed
-                    if st.button(f"View Live Feed for {selected_device['id']}"):
-                        st.session_state.show_device_feed = selected_device['id']
-                        st.session_state.show_live_feed = True
-                        st.rerun()
+        # Show device info if coordinates are in session state
+        if "last_clicked_coords" in st.session_state:
+            clicked_lat, clicked_lng = st.session_state.last_clicked_coords
+            # Find device near clicked coordinates
+            selected_device = None
+            for device_id, device_data in st.session_state.devices.items():
+                # Use small threshold for coordinate matching
+                if (abs(device_data["lat"] - clicked_lat) < 0.01 and 
+                    abs(device_data["lon"] - clicked_lng) < 0.01):
+                    selected_device = device_data
+                    break
+            
+            if selected_device:
+                st.write(f"**Device:** {selected_device['id']}")
+                
+                # Check last activity time
+                try:
+                    last_updated = selected_device['last_updated']
+                    if isinstance(last_updated, str):
+                        last_updated = datetime.fromisoformat(last_updated)
+                    time_diff = datetime.now() - last_updated
+                    status = "🟢 Active" if time_diff < timedelta(minutes=5) else "🟠 Inactive"
+                    st.write(f"**Status:** {status} (Last seen: {last_updated.strftime('%H:%M:%S')})")
+                except:
+                    st.write("**Status:** Unknown")
+                
+                st.write(f"**Total Detections:** {selected_device['detections']}")
+                st.write(f"**Gas Alerts:** {selected_device.get('gas_alerts', 0)}")
+                
+                # Device IP
+                device_id = selected_device['id']
+                device_ip = st.session_state.device_ips.get(device_id, "Unknown")
+                st.write(f"**IP Address:** {device_ip}")
+                
+                # Option to view the device's live feed
+                if st.button(f"View Live Feed for {selected_device['id']}", key="view_feed"):
+                    st.session_state.show_device_feed = selected_device['id']
+                    st.session_state.show_live_feed = True
+                    if "last_clicked_coords" in st.session_state:
+                        del st.session_state.last_clicked_coords
+                
+                # Add a clear button to remove device info
+                if st.button("Clear Selection", key="clear_selection"):
+                    if "last_clicked_coords" in st.session_state:
+                        del st.session_state.last_clicked_coords
     else:
         st.markdown("#### Live Detection Feed")
         # Display which device we're viewing
@@ -533,12 +544,16 @@ def create_middle_column(user_location):
                 st.session_state.show_live_feed = False
                 if "show_device_feed" in st.session_state:
                     del st.session_state.show_device_feed
-                st.rerun()
+                if "last_clicked_coords" in st.session_state:
+                    del st.session_state.last_clicked_coords
         else:
             st.error("No device selected or device not available")
             if st.button("Back to Map"):
                 st.session_state.show_live_feed = False
-                st.rerun()
+                if "show_device_feed" in st.session_state:
+                    del st.session_state.show_device_feed
+                if "last_clicked_coords" in st.session_state:
+                    del st.session_state.last_clicked_coords
 
 def create_right_column(metrics):
     """Create the right column with quick stats and system status"""
