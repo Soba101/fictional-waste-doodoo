@@ -4,7 +4,7 @@ A comprehensive IoT solution for real-time waste detection and monitoring using 
 
 ## System Overview
 
-The Waste Detection System consists of three primary components:
+The Waste Detection System consists of four primary components:
 
 1. **Edge Devices (Raspberry Pi)**: 
    - Capture video and detect waste items using computer vision
@@ -12,14 +12,20 @@ The Waste Detection System consists of three primary components:
    - Include optional gas sensor and GPS modules
    - Send detection data to the dashboard and database components
 
-2. **Dashboard Server**:
+2. **Waste Detection Model**:
+   - YOLOv8-based deep learning model for waste classification
+   - Optimized for edge deployment on Raspberry Pi
+   - Supports real-time detection of various waste types
+   - Includes training pipeline for model customization
+
+3. **Dashboard Server**:
    - Streamlit-based web interface for real-time monitoring
    - Interactive map showing device locations and status
    - Live video feed viewing capabilities
    - Historical data visualization and analysis
    - Connection management for all edge devices
 
-3. **Database Server**:
+4. **Database Server**:
    - MariaDB database for persistent storage of detection data
    - Custom receiver script for processing data from edge devices
    - Stores device information, detection events, and keyframe images
@@ -48,6 +54,16 @@ waste-detection-system/
 │   ├── PR_curve.png         # Precision-Recall curve
 │   ├── R_curve.png          # Recall curve visualization
 │   └── results.png          # Overall results visualization
+├── Yolov8-waste-model/      # Waste detection model
+│   ├── README.md           # Model documentation and setup guide
+│   ├── app.py             # Streamlit web interface
+│   ├── train.py           # Model training script
+│   ├── helper.py          # Utility functions
+│   ├── settings.py        # Configuration settings
+│   ├── requirements.txt   # Model dependencies
+│   ├── yolov8n.pt        # Pre-trained model
+│   ├── weights/          # Trained model weights
+│   └── pi5_optimized/    # Raspberry Pi 5 optimized version
 ├── new-pi/                   # Edge device code for Raspberry Pi
 │   ├── README.md            # Setup guide for Raspberry Pi devices
 │   ├── HARDWARE.md          # Hardware setup and wiring guide
@@ -85,12 +101,19 @@ For detailed instructions on setting up each component, see the respective READM
 
 1. **Hardware Setup**: [HARDWARE.md](/new-pi/HARDWARE.md) - Detailed wiring and hardware connection guide
 2. **Edge Devices (Raspberry Pi)**: [README.md](new-pi/README.md)
-3. **Dashboard**: [README.md](waste-dashboard/README.md)
-4. **Database**: [README.md](waste-db/README.md)
+3. **Waste Detection Model**: [README.md](Yolov8-waste-model/README.md)
+4. **Dashboard**: [README.md](waste-dashboard/README.md)
+5. **Database**: [README.md](waste-db/README.md)
 
 ### Install Required Dependencies
 
 Each component has its own set of dependencies:
+
+#### For Waste Detection Model:
+```bash
+cd Yolov8-waste-model
+pip install -r requirements.txt
+```
 
 #### For Database Server:
 ```bash
@@ -129,10 +152,12 @@ For proper communication between components, configure the following:
 ## System Features
 
 ### Waste Detection
-- Real-time detection of waste items (plastic, paper, glass)
-- Classification with confidence scores
+- Real-time detection of waste items using YOLOv8 model
+- Classification of various waste types (plastic, paper, glass, metal)
+- Confidence score-based detection
 - Bounding box visualization
 - Detection event logging
+- Model training and customization capabilities
 
 ### Environmental Monitoring
 - Gas detection using MQ-2 sensor
